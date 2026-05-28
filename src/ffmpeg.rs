@@ -44,6 +44,9 @@ impl CaptureConfig {
 pub fn build_capture_command(config: &CaptureConfig) -> Command {
     let mut cmd = Command::new("ffmpeg");
 
+    // Global options (must be before inputs)
+    cmd.args(["-y"]);
+
     // Input: screen capture via avfoundation
     // Format: avfoundation expects "video:audio" device indices
     // "1:" = screen (index 1), "none" for no audio input device
@@ -74,9 +77,6 @@ pub fn build_capture_command(config: &CaptureConfig) -> Command {
         // Single output file
         cmd.arg(&config.output_path);
     }
-
-    // Overwrite output files without asking
-    cmd.args(["-y"]);
 
     cmd
 }
