@@ -46,9 +46,24 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
     // Avoid collision
     let path = output::avoid_collision(&path);
 
+    // Detect avfoundation devices and resolve BlackHole + microphone indices.
+    // Required for the mixed-audio capture pipeline from issue #3 (system +
+    // mic). If BlackHole is missing, fail fast with setup instructions rather
+    // than letting ffmpeg die with an opaque error.
+    let audio = match ffmpeg::detect_audio_setup() {
+        Ok(audio) => Some(audio),
+        Err(diag) => {
+            anyhow::bail!("{}\n\n{}", diag, ffmpeg::blackhole_setup_instructions());
+        }
+    };
+
     // Build ffmpeg config
-    let ffmpeg_config = CaptureConfig::new(path.to_string_lossy().to_string())
+    let mut ffmpeg_config = CaptureConfig::new(path.to_string_lossy().to_string())
         .with_verbose(args.verbose);
+
+    if let Some(a) = audio {
+        ffmpeg_config = ffmpeg_config.with_audio(a);
+    }
 
     let ffmpeg_config = match args.duration {
         Some(d) => ffmpeg_config.with_duration(d),
