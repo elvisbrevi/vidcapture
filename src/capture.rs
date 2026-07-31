@@ -10,7 +10,7 @@ const FFMPEG_INTERRUPT_EXIT_CODE: i32 = 255;
 /// Trait for managing ffmpeg processes. Allows mocking in tests.
 pub trait FfmpegProcess {
     fn spawn(&mut self) -> anyhow::Result<()>;
-    fn kill(&mut self) -> anyhow::Result<()>;
+    fn request_stop(&mut self) -> anyhow::Result<()>;
     fn is_running(&mut self) -> bool;
     fn wait_for_exit(&mut self) -> anyhow::Result<Option<i32>>;
     fn take_stderr(&mut self) -> Option<Vec<u8>>;
@@ -44,7 +44,7 @@ impl FfmpegProcess for RealFfmpegProcess {
         Ok(())
     }
 
-    fn kill(&mut self) -> anyhow::Result<()> {
+    fn request_stop(&mut self) -> anyhow::Result<()> {
         if let Some(child) = self.child.as_mut() {
             // ffmpeg finalizes the MP4 trailer when it receives SIGINT. Using
             // Child::kill would send SIGKILL and leave the recording corrupt.
@@ -142,7 +142,7 @@ impl CaptureSession {
             anyhow::bail!("No capture session running");
         }
 
-        self.process.kill()?;
+        self.process.request_stop()?;
         self.stop_requested = true;
         self.state = CaptureState::Stopped;
         Ok(())
@@ -202,7 +202,7 @@ mod tests {
     /// Mock ffmpeg process for testing.
     struct MockFfmpegProcess {
         spawned: Rc<RefCell<bool>>,
-        killed: Rc<RefCell<bool>>,
+        stop_requested: Rc<RefCell<bool>>,
         running: Rc<RefCell<bool>>,
         exit_code: Option<i32>,
     }
@@ -216,17 +216,17 @@ mod tests {
             exit_code: Option<i32>,
         ) -> (Self, Rc<RefCell<bool>>, Rc<RefCell<bool>>, Rc<RefCell<bool>>) {
             let spawned = Rc::new(RefCell::new(false));
-            let killed = Rc::new(RefCell::new(false));
+            let stop_requested = Rc::new(RefCell::new(false));
             let running = Rc::new(RefCell::new(false));
 
             let process = Self {
                 spawned: spawned.clone(),
-                killed: killed.clone(),
+                stop_requested: stop_requested.clone(),
                 running: running.clone(),
                 exit_code,
             };
 
-            (process, spawned, killed, running)
+            (process, spawned, stop_requested, running)
         }
     }
 
@@ -237,8 +237,8 @@ mod tests {
             Ok(())
         }
 
-        fn kill(&mut self) -> anyhow::Result<()> {
-            *self.killed.borrow_mut() = true;
+        fn request_stop(&mut self) -> anyhow::Result<()> {
+            *self.stop_requested.borrow_mut() = true;
             *self.running.borrow_mut() = false;
             Ok(())
         }
@@ -276,15 +276,15 @@ mod tests {
     }
 
     #[test]
-    fn session_stop_kills_process() {
-        let (process, _, killed, _) = MockFfmpegProcess::new();
+    fn session_stop_requests_process_stop() {
+        let (process, _, stop_requested, _) = MockFfmpegProcess::new();
         let mut session = CaptureSession::new(Box::new(process), None);
 
         session.start().unwrap();
         session.stop().unwrap();
 
         assert_eq!(*session.state(), CaptureState::Stopped);
-        assert!(*killed.borrow());
+        assert!(*stop_requested.borrow());
     }
 
     #[test]
@@ -324,19 +324,19 @@ mod tests {
 
     #[test]
     fn check_and_stop_if_expired_returns_false_when_not_expired() {
-        let (process, _, killed, _) = MockFfmpegProcess::new();
+        let (process, _, stop_requested, _) = MockFfmpegProcess::new();
         let mut session = CaptureSession::new(Box::new(process), Some(Duration::from_secs(10)));
 
         session.start().unwrap();
         let expired = session.check_and_stop_if_expired().unwrap();
 
         assert!(!expired);
-        assert!(!*killed.borrow());
+        assert!(!*stop_requested.borrow());
     }
 
     #[test]
     fn check_and_stop_if_expired_stops_when_expired() {
-        let (process, _, killed, _) = MockFfmpegProcess::new();
+        let (process, _, stop_requested, _) = MockFfmpegProcess::new();
         let mut session = CaptureSession::new(
             Box::new(process),
             Some(Duration::from_millis(1)), // Very short duration
@@ -349,8 +349,8 @@ mod tests {
 
         assert!(expired);
         assert_eq!(*session.state(), CaptureState::Stopped);
-        // Note: process is NOT killed - ffmpeg exits naturally with -t
-        assert!(!*killed.borrow());
+        // Note: process is NOT asked to stop - ffmpeg exits naturally with -t
+        assert!(!*stop_requested.borrow());
     }
 
     #[test]
