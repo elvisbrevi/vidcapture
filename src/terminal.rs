@@ -3,27 +3,58 @@ use std::time::Duration;
 use crossterm::event::{poll, read, Event, KeyCode};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-/// Poll for 's' key press. Returns true if 's' was pressed, false on timeout.
-/// Returns false if raw mode isn't available (e.g., non-interactive terminal).
-pub fn wait_for_stop_key(timeout: Duration) -> anyhow::Result<bool> {
-    // Try to enable raw mode - if it fails, just return false (no key pressed)
-    if enable_raw_mode().is_err() {
-        std::thread::sleep(timeout);
-        return Ok(false);
+/// Owns terminal raw mode for one capture session.
+///
+/// Raw mode is enabled once before polling begins and is always disabled when
+/// the listener is dropped, including when polling or key reading returns an
+/// error. This keeps the user's terminal usable after a capture stops.
+pub struct StopKeyListener {
+    raw_mode_enabled: bool,
+}
+
+impl StopKeyListener {
+    /// Create a listener. Non-interactive terminals do not support raw mode;
+    /// in that case the listener falls back to sleeping until the timeout.
+    pub fn new() -> Self {
+        Self {
+            raw_mode_enabled: enable_raw_mode().is_ok(),
+        }
     }
 
-    let result = if poll(timeout)? {
-        if let Event::Key(key) = read()? {
-            matches!(key.code, KeyCode::Char('s'))
-        } else {
-            false
+    /// Wait for an `s` key press, returning false when the timeout expires.
+    pub fn wait_for_stop_key(&self, timeout: Duration) -> anyhow::Result<bool> {
+        if !self.raw_mode_enabled {
+            std::thread::sleep(timeout);
+            return Ok(false);
         }
-    } else {
-        false
-    };
 
-    let _ = disable_raw_mode();
-    Ok(result)
+        if !poll(timeout)? {
+            return Ok(false);
+        }
+
+        if let Event::Key(key) = read()? {
+            Ok(matches!(key.code, KeyCode::Char('s' | 'S')))
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+impl Drop for StopKeyListener {
+    fn drop(&mut self) {
+        if self.raw_mode_enabled {
+            let _ = disable_raw_mode();
+        }
+    }
+}
+
+/// Poll for an `s` key press for callers that need a one-shot check.
+///
+/// Capture orchestration should prefer [`StopKeyListener`] so raw mode is not
+/// repeatedly toggled during a recording.
+pub fn wait_for_stop_key(timeout: Duration) -> anyhow::Result<bool> {
+    let listener = StopKeyListener::new();
+    listener.wait_for_stop_key(timeout)
 }
 
 /// Print "Capturing, press s to stop." to stderr.
@@ -115,6 +146,12 @@ pub fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_key_listener_returns_false_without_a_ready_key() {
+        let listener = StopKeyListener::new();
+        assert!(!listener.wait_for_stop_key(Duration::ZERO).unwrap());
+    }
 
     #[test]
     fn format_help_returns_non_empty_string() {
