@@ -2,6 +2,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use crate::output;
+
 /// Configuration for an ffmpeg capture session.
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
@@ -111,33 +113,30 @@ pub fn build_capture_command(config: &CaptureConfig) -> Command {
         cmd.args(["-t", &duration.as_secs().to_string()]);
     }
 
-    // Interval mode: use segment muxer
+    // Interval mode: use segment muxer. The flags below give us a seamless
+    // split: each segment starts at t=0 (playable in any MP4 player) and
+    // keyframes are forced exactly at the segment boundary so the muxer can
+    // cut without losing frames.
     let output_path = if let Some(interval) = config.interval {
-        cmd.args(["-f", "segment", "-segment_time", &interval.as_secs().to_string()]);
-        generate_segment_pattern(&config.output_path)
+        let interval_secs = interval.as_secs().to_string();
+        cmd.args([
+            "-f",
+            "segment",
+            "-segment_time",
+            &interval_secs,
+            "-reset_timestamps",
+            "1",
+            "-force_key_frames",
+            &format!("expr:gte(t,n_forced*{})", interval_secs),
+        ]);
+        let base = Path::new(&config.output_path);
+        output::segment_ffmpeg_pattern(base).to_string_lossy().to_string()
     } else {
         config.output_path.clone()
     };
     cmd.arg(&output_path);
 
     cmd
-}
-
-/// Generate a segment pattern from an output path.
-/// Converts "vidcapture_2026-05-28_14-30-00.mp4" to
-/// "vidcapture_2026-05-28_14-30-00_seg%03d.mp4"
-fn generate_segment_pattern(output_path: &str) -> String {
-    let path = Path::new(output_path);
-    let stem = path.file_stem().unwrap().to_string_lossy();
-    let extension = path.extension().map(|e| e.to_string_lossy().to_string());
-    let parent = path.parent().unwrap_or(Path::new("."));
-
-    let segment_name = match extension {
-        Some(ext) => format!("{}_seg%03d.{}", stem, ext),
-        None => format!("{}_seg%03d", stem),
-    };
-
-    parent.join(segment_name).to_string_lossy().to_string()
 }
 
 /// A device exposed by macOS's AVFoundation layer (avfoundation input in ffmpeg).
@@ -582,16 +581,105 @@ mod tests {
 
     #[test]
     fn segment_pattern_generation() {
-        let result = generate_segment_pattern("vidcapture_2026-05-28_14-30-00.mp4");
-        assert_eq!(result, "vidcapture_2026-05-28_14-30-00_seg%03d.mp4");
+        let result = output::segment_ffmpeg_pattern(Path::new("vidcapture_2026-05-28_14-30-00.mp4"));
+        assert_eq!(
+            result,
+            Path::new("vidcapture_2026-05-28_14-30-00_seg%03d.mp4")
+        );
+    }
+
+    // ---- interval mode (issue #6) requires seamless split ----
+
+    /// Without `-reset_timestamps 1`, segment 002 starts at t=10s instead of
+    /// t=0s, which breaks players that expect each segment to begin at the
+    /// timeline start. The spec requires a valid, playable MP4 per segment.
+    #[test]
+    fn capture_with_interval_resets_timestamps_for_each_segment() {
+        let config = base_config().with_interval(Duration::from_secs(10));
+        let cmd = build_capture_command(&config);
+        let args = get_args(&cmd);
+
+        let pos = args
+            .iter()
+            .position(|a| a == "-reset_timestamps")
+            .expect("-reset_timestamps flag missing — segments won't play cleanly");
+        assert_eq!(
+            args[pos + 1], "1",
+            "-reset_timestamps must be 1 to give each segment a fresh t=0"
+        );
+    }
+
+    /// Place keyframes exactly at segment boundaries so the segment muxer can
+    /// split on a keyframe, with no gap, no duplicate frame, and no half-GOP
+    /// at the cut. The expression must use `n_forced*<interval>` so that
+    /// `n_forced` increments after each forced keyframe and the next
+    /// boundary is hit at the right time.
+    #[test]
+    fn capture_with_interval_force_keyframes_align_to_segment_boundary() {
+        let config = base_config().with_interval(Duration::from_secs(10));
+        let cmd = build_capture_command(&config);
+        let args = get_args(&cmd);
+
+        let pos = args
+            .iter()
+            .position(|a| a == "-force_key_frames")
+            .expect("-force_key_frames flag missing — segments will not split at keyframes");
+        let expr = &args[pos + 1];
+        // The exact expression shape matters: `expr:gte(t,n_forced*10)`
+        // forces a keyframe at every multiple of 10 seconds. A weaker
+        // expression like `expr:gte(t,10)` would force a single keyframe
+        // and never another, breaking the seamless-split guarantee.
+        assert_eq!(
+            expr, "expr:gte(t,n_forced*10)",
+            "force_key_frames must use n_forced*<interval> for repeated boundaries, got: {}",
+            expr
+        );
+    }
+
+    /// Without interval mode, the seamless-split flags must not be added:
+    /// `-reset_timestamps 1` and `-force_key_frames` are only relevant when
+    /// the segment muxer is in use.
+    #[test]
+    fn capture_without_interval_omits_seamless_split_flags() {
+        let config = base_config();
+        let cmd = build_capture_command(&config);
+        let args = get_args(&cmd);
+
+        assert!(
+            !args.contains(&"-reset_timestamps".to_string()),
+            "non-interval capture must not request segment-only flags"
+        );
+        assert!(
+            !args.contains(&"-force_key_frames".to_string()),
+            "non-interval capture must not request segment-only flags"
+        );
+    }
+
+    /// The segment filename pattern embedded in the ffmpeg command must be
+    /// `..._seg%03d.mp4` so the segments ffmpeg actually writes match the
+    /// `_segNNN` suffix the issue requires.
+    #[test]
+    fn capture_with_interval_segment_pattern_uses_three_digit_padding() {
+        let config = base_config().with_interval(Duration::from_secs(10));
+        let cmd = build_capture_command(&config);
+        let args = get_args(&cmd);
+
+        let pattern = args
+            .iter()
+            .find(|a| a.contains("seg%03d"))
+            .expect("expected segment pattern with %03d padding in args");
+        assert_eq!(
+            pattern, "vidcapture_2026-05-28_14-30-00_seg%03d.mp4",
+            "segment pattern must match the issue spec"
+        );
     }
 
     #[test]
     fn segment_pattern_with_directory() {
-        let result = generate_segment_pattern("/tmp/output/vidcapture_2026-05-28_14-30-00.mp4");
+        let result = output::segment_ffmpeg_pattern(Path::new("/tmp/output/vidcapture_2026-05-28_14-30-00.mp4"));
         assert_eq!(
             result,
-            "/tmp/output/vidcapture_2026-05-28_14-30-00_seg%03d.mp4"
+            Path::new("/tmp/output/vidcapture_2026-05-28_14-30-00_seg%03d.mp4")
         );
     }
 

@@ -62,6 +62,46 @@ pub fn generate_segment_filename(
     config.directory.join(filename)
 }
 
+/// Build the ffmpeg segment-muxer output pattern from a base filename.
+///
+/// ffmpeg's `-f segment` muxer substitutes a printf placeholder at runtime
+/// with the 0-padded segment number, so we hand it a path whose filename
+/// ends with `_seg%03d.<ext>`. For example, given
+/// `vidcapture_2026-05-28_14-30-00.mp4`, this returns
+/// `vidcapture_2026-05-28_14-30-00_seg%03d.mp4`.
+pub fn segment_ffmpeg_pattern(base_path: &Path) -> PathBuf {
+    let parent = base_path.parent().unwrap_or(Path::new("."));
+    let stem = base_path.file_stem().unwrap().to_string_lossy();
+    let extension = base_path.extension().map(|e| e.to_string_lossy().to_string());
+
+    let segment_name = match extension {
+        Some(ext) => format!("{}_seg%03d.{}", stem, ext),
+        None => format!("{}_seg%03d", stem),
+    };
+
+    parent.join(segment_name)
+}
+
+/// Build a user-friendly display path for a segment-mode capture session.
+///
+/// The result is intent-preserving — the user sees a single string that
+/// describes the family of files produced, with a shell glob in place of
+/// the printf placeholder. Given
+/// `vidcapture_2026-05-28_14-30-00.mp4`, this returns
+/// `vidcapture_2026-05-28_14-30-00_seg*.mp4`.
+pub fn segment_display_pattern(base_path: &Path) -> PathBuf {
+    let parent = base_path.parent().unwrap_or(Path::new("."));
+    let stem = base_path.file_stem().unwrap().to_string_lossy();
+    let extension = base_path.extension().map(|e| e.to_string_lossy().to_string());
+
+    let segment_name = match extension {
+        Some(ext) => format!("{}_seg*.{}", stem, ext),
+        None => format!("{}_seg*", stem),
+    };
+
+    parent.join(segment_name)
+}
+
 /// Resolve the output directory, creating it if it doesn't exist.
 /// Returns an error if the path exists but is not a directory, or if creation
 /// of a missing path fails (e.g. an intermediate path component is an
@@ -152,6 +192,39 @@ mod tests {
         assert_eq!(
             result,
             PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00_seg042.mp4")
+        );
+    }
+
+    #[test]
+    fn segment_ffmpeg_pattern_uses_three_digit_padding() {
+        let base = PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00.mp4");
+        let result = segment_ffmpeg_pattern(&base);
+        assert_eq!(
+            result,
+            PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00_seg%03d.mp4")
+        );
+    }
+
+    #[test]
+    fn segment_ffmpeg_pattern_handles_no_extension() {
+        let base = PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00");
+        let result = segment_ffmpeg_pattern(&base);
+        assert_eq!(
+            result,
+            PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00_seg%03d")
+        );
+    }
+
+    #[test]
+    fn segment_display_pattern_uses_glob() {
+        // The display path is what the user sees in the "Saved to" message.
+        // It must use a shell-glob (not a printf placeholder) so the user
+        // can copy it into a shell without confusion.
+        let base = PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00.mp4");
+        let result = segment_display_pattern(&base);
+        assert_eq!(
+            result,
+            PathBuf::from("/tmp/vidcapture/vidcapture_2026-05-28_14-30-00_seg*.mp4")
         );
     }
 

@@ -105,6 +105,14 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
     // Wait for ffmpeg to finish and check its exit code
     session.finish()?;
 
-    terminal::print_saved(&path);
+    if args.every.is_some() {
+        // `path` is the .mp4 base name; ffmpeg actually wrote a family of
+        // files following the segment pattern. Show a shell-glob so the
+        // user can copy/paste it (e.g. `ls ${Saved to ...}`).
+        let display = output::segment_display_pattern(&path);
+        terminal::print_saved(&display);
+    } else {
+        terminal::print_saved(&path);
+    }
     Ok(())
 }
