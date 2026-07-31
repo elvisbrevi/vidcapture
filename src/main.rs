@@ -19,6 +19,10 @@ fn main() {
 
     let result = match args.command {
         Command::Start(start_args) => run_capture(start_args),
+        Command::Help => {
+            terminal::print_help();
+            Ok(())
+        }
     };
 
     if let Err(e) = result {

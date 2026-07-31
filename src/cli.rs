@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
-#[command(name = "vidcapture", about = "CLI screen and audio recorder for macOS")]
+#[command(
+    name = "vidcapture",
+    about = "CLI screen and audio recorder for macOS",
+    disable_help_subcommand = true
+)]
 pub struct Args {
     #[command(subcommand)]
     pub command: Command,
@@ -13,6 +17,8 @@ pub struct Args {
 pub enum Command {
     /// Start capturing screen and audio
     Start(StartArgs),
+    /// Show help with setup instructions
+    Help,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -153,6 +159,7 @@ mod tests {
                 assert_eq!(start_args.output, None);
                 assert!(!start_args.verbose);
             }
+            Command::Help => panic!("expected Start command, got Help"),
         }
     }
 
@@ -166,6 +173,7 @@ mod tests {
                 assert_eq!(start_args.output, None);
                 assert!(!start_args.verbose);
             }
+            Command::Help => panic!("expected Start command, got Help"),
         }
     }
 
@@ -177,6 +185,7 @@ mod tests {
                 assert_eq!(start_args.duration, None);
                 assert_eq!(start_args.every, Some(Duration::from_secs(30)));
             }
+            Command::Help => panic!("expected Start command, got Help"),
         }
     }
 
@@ -201,6 +210,20 @@ mod tests {
                 assert_eq!(start_args.output, Some(PathBuf::from("/tmp/output")));
                 assert!(start_args.verbose);
             }
+            Command::Help => panic!("expected Start command, got Help"),
         }
+    }
+
+    #[test]
+    fn parse_help_subcommand() {
+        let args = Args::try_parse_from(["vidcapture", "help"]).unwrap();
+        assert!(matches!(args.command, Command::Help));
+    }
+
+    #[test]
+    fn parse_no_subcommand_shows_help() {
+        // clap's default behavior is to print help and exit when no subcommand is provided.
+        let result = Args::try_parse_from(["vidcapture"]);
+        assert!(result.is_err(), "expected error when no subcommand given");
     }
 }
