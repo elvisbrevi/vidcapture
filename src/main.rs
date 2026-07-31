@@ -84,8 +84,10 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
     // implementation restores the terminal even when capture returns an error.
     let key_listener = terminal::StopKeyListener::new();
 
-    // Print status
-    terminal::print_capturing();
+    // Render the first status line. Subsequent ticks overwrite it in-place via
+    // a carriage return; the line already includes the "press s to stop"
+    // prompt so a separate static "Capturing..." line is no longer needed.
+    terminal::print_capture_status(session.elapsed(), session.duration());
 
     // Poll for 's' key or duration expiry.
     loop {
@@ -102,7 +104,13 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
             // Do not wait forever if ffmpeg failed before the user pressed 's'.
             break;
         }
+        // Refresh the on-screen elapsed/remaining counter on each tick.
+        terminal::print_capture_status(session.elapsed(), session.duration());
     }
+
+    // Move to a fresh line so the final "Saved to ..." message doesn't land
+    // mid-status-line when the terminal overwrites with carriage returns.
+    eprintln!();
 
     // Wait for ffmpeg to finish and check its exit code
     session.finish()?;
