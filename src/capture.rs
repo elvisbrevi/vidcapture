@@ -165,6 +165,20 @@ impl CaptureSession {
         }
     }
 
+    /// Elapsed time since the session started. Returns `Duration::ZERO` before
+    /// `start` is called so callers can render a status line at any time.
+    pub fn elapsed(&self) -> Duration {
+        match self.start_time {
+            Some(start) => start.elapsed(),
+            None => Duration::ZERO,
+        }
+    }
+
+    /// Configured session duration (`-d`). `None` for indefinite captures.
+    pub fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
     pub fn check_and_stop_if_expired(&mut self) -> anyhow::Result<bool> {
         if self.state == CaptureState::Running && self.is_duration_expired() {
             self.state = CaptureState::Stopped;
@@ -387,5 +401,41 @@ mod tests {
             .finish()
             .expect("a user-requested interrupt should finish cleanly");
         assert_eq!(*session.state(), CaptureState::Stopped);
+    }
+
+    #[test]
+    fn elapsed_is_zero_before_start() {
+        // A fresh session has no recorded start time; elapsed() must report
+        // zero rather than panicking so the status renderer can run before the
+        // session is running.
+        let (process, _, _, _) = MockFfmpegProcess::new();
+        let session = CaptureSession::new(Box::new(process), None);
+        assert_eq!(session.elapsed(), Duration::ZERO);
+    }
+
+    #[test]
+    fn elapsed_grows_after_start() {
+        let (process, _, _, _) = MockFfmpegProcess::new();
+        let mut session = CaptureSession::new(Box::new(process), None);
+        session.start().unwrap();
+        // After starting, elapsed must be at least zero and monotonic.
+        let first = session.elapsed();
+        thread::sleep(Duration::from_millis(5));
+        let second = session.elapsed();
+        assert!(second >= first, "elapsed should not go backwards");
+    }
+
+    #[test]
+    fn duration_returns_configured_duration() {
+        let (process, _, _, _) = MockFfmpegProcess::new();
+        let session = CaptureSession::new(Box::new(process), Some(Duration::from_secs(30)));
+        assert_eq!(session.duration(), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn duration_returns_none_when_unset() {
+        let (process, _, _, _) = MockFfmpegProcess::new();
+        let session = CaptureSession::new(Box::new(process), None);
+        assert_eq!(session.duration(), None);
     }
 }

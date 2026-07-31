@@ -3,6 +3,74 @@ use std::time::Duration;
 use crossterm::event::{poll, read, Event, KeyCode};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
+/// ANSI escape used to move the cursor back to the start of the current line.
+/// Using `\r` (carriage return) instead of `\n` lets the status line update
+/// in-place rather than scrolling the terminal on every poll iteration.
+const CARRIAGE_RETURN: &str = "\r";
+
+/// ANSI escape that erases from the cursor to the end of the line. Sent after
+/// each status update so residual characters from a longer previous line do
+/// not leak into the next refresh.
+const CLEAR_LINE: &str = "\x1b[K";
+
+/// Format a duration as a compact human-readable string for the status line.
+///
+/// Examples:
+/// - `format_status_duration(0s)` → `"0s"`
+/// - `format_status_duration(65s)` → `"1m05s"`
+/// - `format_status_duration(3_661s)` → `"1h01m01s"`
+pub fn format_status_duration(duration: Duration) -> String {
+    let total = duration.as_secs();
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+
+    if hours > 0 {
+        format!("{}h{:02}m{:02}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m{:02}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+/// Build the capture status line for `elapsed` and the optional `duration`.
+///
+/// When `duration` is `Some`, the status includes a remaining-time component;
+/// when `None`, only the elapsed component is shown. The line ends with the
+/// "press s to stop" prompt so the user always knows how to stop recording.
+pub fn format_capture_status(elapsed: Duration, duration: Option<Duration>) -> String {
+    let elapsed_str = format_status_duration(elapsed);
+    match duration {
+        Some(total) => {
+            // Clamp remaining at zero so a slow refresh never shows a negative
+            // countdown if a poll races past the configured duration.
+            let remaining = total.saturating_sub(elapsed);
+            format!(
+                "Capturing [{} elapsed, {} remaining], press s to stop.",
+                elapsed_str,
+                format_status_duration(remaining),
+            )
+        }
+        None => format!(
+            "Capturing [{} elapsed], press s to stop.",
+            elapsed_str,
+        ),
+    }
+}
+
+/// Print the capture status line, overwriting any previous one in-place.
+///
+/// Emits the status followed by `CLEAR_LINE` so a shorter line replaces a
+/// longer one cleanly. Callers should invoke this from a poll loop so the
+/// user sees the timer advance without spamming the terminal.
+pub fn print_capture_status(elapsed: Duration, duration: Option<Duration>) {
+    let line = format_capture_status(elapsed, duration);
+    eprint!("{}{}{}", CARRIAGE_RETURN, line, CLEAR_LINE);
+    use std::io::Write;
+    let _ = std::io::stderr().flush();
+}
+
 /// Owns terminal raw mode for one capture session.
 ///
 /// Raw mode is enabled once before polling begins and is always disabled when
@@ -55,11 +123,6 @@ impl Drop for StopKeyListener {
 pub fn wait_for_stop_key(timeout: Duration) -> anyhow::Result<bool> {
     let listener = StopKeyListener::new();
     listener.wait_for_stop_key(timeout)
-}
-
-/// Print "Capturing, press s to stop." to stderr.
-pub fn print_capturing() {
-    eprintln!("Capturing, press s to stop.");
 }
 
 /// Print the saved output path to stderr.
@@ -301,5 +364,71 @@ mod tests {
             help.contains("EXAMPLES"),
             "help text should include an EXAMPLES section header"
         );
+    }
+
+    #[test]
+    fn format_status_duration_seconds_only() {
+        assert_eq!(format_status_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(format_status_duration(Duration::from_secs(7)), "7s");
+        assert_eq!(format_status_duration(Duration::from_secs(59)), "59s");
+    }
+
+    #[test]
+    fn format_status_duration_minutes_and_seconds() {
+        // No hours → minutes:seconds form, with seconds zero-padded.
+        assert_eq!(format_status_duration(Duration::from_secs(60)), "1m00s");
+        assert_eq!(format_status_duration(Duration::from_secs(125)), "2m05s");
+        assert_eq!(format_status_duration(Duration::from_secs(3599)), "59m59s");
+    }
+
+    #[test]
+    fn format_status_duration_full_hours_minutes_seconds() {
+        // With hours, minutes and seconds are both zero-padded.
+        assert_eq!(
+            format_status_duration(Duration::from_secs(3_661)),
+            "1h01m01s"
+        );
+        assert_eq!(
+            format_status_duration(Duration::from_secs(7_200)),
+            "2h00m00s"
+        );
+    }
+
+    #[test]
+    fn format_capture_status_with_duration_includes_remaining() {
+        let line = format_capture_status(Duration::from_secs(5), Some(Duration::from_secs(10)));
+        assert!(line.contains("5s elapsed"), "got: {}", line);
+        assert!(line.contains("5s remaining"), "got: {}", line);
+        assert!(line.contains("press s to stop"), "got: {}", line);
+    }
+
+    #[test]
+    fn format_capture_status_without_duration_omits_remaining() {
+        let line = format_capture_status(Duration::from_secs(5), None);
+        assert!(line.contains("5s elapsed"), "got: {}", line);
+        assert!(
+            !line.contains("remaining"),
+            "indefinite status must not advertise a remaining time, got: {}",
+            line
+        );
+    }
+
+    #[test]
+    fn format_capture_status_remaining_does_not_go_negative() {
+        // Polling slightly past the duration must clamp remaining at 0s, not
+        // produce a negative countdown that confuses the user.
+        let line = format_capture_status(Duration::from_secs(11), Some(Duration::from_secs(10)));
+        assert!(line.contains("0s remaining"), "got: {}", line);
+    }
+
+    #[test]
+    fn format_capture_status_with_long_duration_uses_hours_form() {
+        // 1h30m10s total, ~5 minutes elapsed.
+        let line = format_capture_status(
+            Duration::from_secs(300),
+            Some(Duration::from_secs(5_410)),
+        );
+        assert!(line.contains("5m00s elapsed"), "got: {}", line);
+        assert!(line.contains("1h25m10s remaining"), "got: {}", line);
     }
 }
