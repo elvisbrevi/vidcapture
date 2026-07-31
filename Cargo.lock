@@ -602,6 +602,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
+ "libc",
  "tracing",
  "tracing-subscriber",
 ]

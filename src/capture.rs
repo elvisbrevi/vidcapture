@@ -1,12 +1,16 @@
+use std::io;
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::ffmpeg::{build_capture_command, CaptureConfig};
 
+const SHELL_SIGINT_EXIT_CODE: i32 = 130;
+const FFMPEG_INTERRUPT_EXIT_CODE: i32 = 255;
+
 /// Trait for managing ffmpeg processes. Allows mocking in tests.
 pub trait FfmpegProcess {
     fn spawn(&mut self) -> anyhow::Result<()>;
-    fn kill(&mut self) -> anyhow::Result<()>;
+    fn request_stop(&mut self) -> anyhow::Result<()>;
     fn is_running(&mut self) -> bool;
     fn wait_for_exit(&mut self) -> anyhow::Result<Option<i32>>;
     fn take_stderr(&mut self) -> Option<Vec<u8>>;
@@ -40,11 +44,25 @@ impl FfmpegProcess for RealFfmpegProcess {
         Ok(())
     }
 
-    fn kill(&mut self) -> anyhow::Result<()> {
-        if let Some(mut child) = self.child.take() {
-            // Graceful: don't error if process already exited
-            let _ = child.kill();
-            let _ = child.wait();
+    fn request_stop(&mut self) -> anyhow::Result<()> {
+        if let Some(child) = self.child.as_mut() {
+            // ffmpeg finalizes the MP4 trailer when it receives SIGINT. Using
+            // Child::kill would send SIGKILL and leave the recording corrupt.
+            #[cfg(unix)]
+            {
+                let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) };
+                if result == -1 {
+                    let error = io::Error::last_os_error();
+                    // The process may have finished between is_running() and
+                    // this call; in that case there is nothing left to signal.
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        return Err(error.into());
+                    }
+                }
+            }
+
+            #[cfg(not(unix))]
+            child.kill()?;
         }
         Ok(())
     }
@@ -93,6 +111,7 @@ pub struct CaptureSession {
     process: Box<dyn FfmpegProcess>,
     start_time: Option<Instant>,
     duration: Option<Duration>,
+    stop_requested: bool,
 }
 
 impl CaptureSession {
@@ -102,6 +121,7 @@ impl CaptureSession {
             process,
             start_time: None,
             duration,
+            stop_requested: false,
         }
     }
 
@@ -113,6 +133,7 @@ impl CaptureSession {
         self.process.spawn()?;
         self.state = CaptureState::Running;
         self.start_time = Some(Instant::now());
+        self.stop_requested = false;
         Ok(())
     }
 
@@ -121,13 +142,19 @@ impl CaptureSession {
             anyhow::bail!("No capture session running");
         }
 
-        self.process.kill()?;
+        self.process.request_stop()?;
+        self.stop_requested = true;
         self.state = CaptureState::Stopped;
         Ok(())
     }
 
     pub fn state(&self) -> &CaptureState {
         &self.state
+    }
+
+    /// Return whether ffmpeg exited before the user requested a stop.
+    pub fn has_exited(&mut self) -> bool {
+        self.state == CaptureState::Running && !self.process.is_running()
     }
 
     pub fn is_duration_expired(&self) -> bool {
@@ -148,13 +175,15 @@ impl CaptureSession {
     }
 
     /// Wait for the ffmpeg process to exit and check its exit code.
-    /// Returns an error if ffmpeg exited with a non-zero code.
+    /// Returns an error if ffmpeg exited unexpectedly with a non-zero code.
     pub fn finish(&mut self) -> anyhow::Result<()> {
         let exit_code = self.process.wait_for_exit()?;
         self.state = CaptureState::Stopped;
 
         if let Some(code) = exit_code {
-            if code != 0 {
+            let expected_interrupt = self.stop_requested
+                && matches!(code, SHELL_SIGINT_EXIT_CODE | FFMPEG_INTERRUPT_EXIT_CODE);
+            if code != 0 && !expected_interrupt {
                 anyhow::bail!("ffmpeg exited with code {}", code);
             }
         }
@@ -173,25 +202,31 @@ mod tests {
     /// Mock ffmpeg process for testing.
     struct MockFfmpegProcess {
         spawned: Rc<RefCell<bool>>,
-        killed: Rc<RefCell<bool>>,
+        stop_requested: Rc<RefCell<bool>>,
         running: Rc<RefCell<bool>>,
         exit_code: Option<i32>,
     }
 
     impl MockFfmpegProcess {
         fn new() -> (Self, Rc<RefCell<bool>>, Rc<RefCell<bool>>, Rc<RefCell<bool>>) {
+            Self::with_exit_code(Some(0))
+        }
+
+        fn with_exit_code(
+            exit_code: Option<i32>,
+        ) -> (Self, Rc<RefCell<bool>>, Rc<RefCell<bool>>, Rc<RefCell<bool>>) {
             let spawned = Rc::new(RefCell::new(false));
-            let killed = Rc::new(RefCell::new(false));
+            let stop_requested = Rc::new(RefCell::new(false));
             let running = Rc::new(RefCell::new(false));
 
             let process = Self {
                 spawned: spawned.clone(),
-                killed: killed.clone(),
+                stop_requested: stop_requested.clone(),
                 running: running.clone(),
-                exit_code: Some(0),
+                exit_code,
             };
 
-            (process, spawned, killed, running)
+            (process, spawned, stop_requested, running)
         }
     }
 
@@ -202,8 +237,8 @@ mod tests {
             Ok(())
         }
 
-        fn kill(&mut self) -> anyhow::Result<()> {
-            *self.killed.borrow_mut() = true;
+        fn request_stop(&mut self) -> anyhow::Result<()> {
+            *self.stop_requested.borrow_mut() = true;
             *self.running.borrow_mut() = false;
             Ok(())
         }
@@ -241,15 +276,15 @@ mod tests {
     }
 
     #[test]
-    fn session_stop_kills_process() {
-        let (process, _, killed, _) = MockFfmpegProcess::new();
+    fn session_stop_requests_process_stop() {
+        let (process, _, stop_requested, _) = MockFfmpegProcess::new();
         let mut session = CaptureSession::new(Box::new(process), None);
 
         session.start().unwrap();
         session.stop().unwrap();
 
         assert_eq!(*session.state(), CaptureState::Stopped);
-        assert!(*killed.borrow());
+        assert!(*stop_requested.borrow());
     }
 
     #[test]
@@ -289,19 +324,19 @@ mod tests {
 
     #[test]
     fn check_and_stop_if_expired_returns_false_when_not_expired() {
-        let (process, _, killed, _) = MockFfmpegProcess::new();
+        let (process, _, stop_requested, _) = MockFfmpegProcess::new();
         let mut session = CaptureSession::new(Box::new(process), Some(Duration::from_secs(10)));
 
         session.start().unwrap();
         let expired = session.check_and_stop_if_expired().unwrap();
 
         assert!(!expired);
-        assert!(!*killed.borrow());
+        assert!(!*stop_requested.borrow());
     }
 
     #[test]
     fn check_and_stop_if_expired_stops_when_expired() {
-        let (process, _, killed, _) = MockFfmpegProcess::new();
+        let (process, _, stop_requested, _) = MockFfmpegProcess::new();
         let mut session = CaptureSession::new(
             Box::new(process),
             Some(Duration::from_millis(1)), // Very short duration
@@ -314,8 +349,19 @@ mod tests {
 
         assert!(expired);
         assert_eq!(*session.state(), CaptureState::Stopped);
-        // Note: process is NOT killed - ffmpeg exits naturally with -t
-        assert!(!*killed.borrow());
+        // Note: process is NOT asked to stop - ffmpeg exits naturally with -t
+        assert!(!*stop_requested.borrow());
+    }
+
+    #[test]
+    fn capture_loop_can_detect_an_early_process_exit() {
+        let (process, _, _, running) = MockFfmpegProcess::new();
+        let mut session = CaptureSession::new(Box::new(process), None);
+
+        session.start().unwrap();
+        *running.borrow_mut() = false;
+
+        assert!(session.has_exited());
     }
 
     #[test]
@@ -326,6 +372,20 @@ mod tests {
         session.start().unwrap();
         session.finish().unwrap();
 
+        assert_eq!(*session.state(), CaptureState::Stopped);
+    }
+
+    #[test]
+    fn finish_accepts_the_exit_code_from_an_interrupted_capture() {
+        let (process, _, _, _) = MockFfmpegProcess::with_exit_code(Some(130));
+        let mut session = CaptureSession::new(Box::new(process), None);
+
+        session.start().unwrap();
+        session.stop().unwrap();
+
+        session
+            .finish()
+            .expect("a user-requested interrupt should finish cleanly");
         assert_eq!(*session.state(), CaptureState::Stopped);
     }
 }

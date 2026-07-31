@@ -390,6 +390,27 @@ mod tests {
     }
 
     #[test]
+    fn screen_capture_uses_full_screen_video_input() {
+        let args = get_args(&build_capture_command(&base_config()));
+
+        let input_position = args
+            .iter()
+            .position(|arg| arg == "-i")
+            .expect("screen input flag should be present");
+        assert_eq!(args[input_position + 1], "1:none");
+
+        let avfoundation_inputs = args
+            .windows(2)
+            .filter(|window| window[0] == "-f" && window[1] == "avfoundation")
+            .count();
+        assert_eq!(avfoundation_inputs, 1, "screen-only capture needs one input");
+        assert!(
+            args.iter().any(|arg| arg.ends_with(".mp4")),
+            "screen capture should write an MP4 output"
+        );
+    }
+
+    #[test]
     fn audio_capture_uses_two_avfoundation_inputs() {
         let audio = AudioSources {
             system_audio_index: 0, // BlackHole 2ch

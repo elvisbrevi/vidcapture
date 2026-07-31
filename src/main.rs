@@ -80,23 +80,31 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
     let mut session = CaptureSession::new(Box::new(process), args.duration);
     session.start()?;
 
+    // Keep raw mode active for the whole session. The listener's Drop
+    // implementation restores the terminal even when capture returns an error.
+    let key_listener = terminal::StopKeyListener::new();
+
     // Print status
     terminal::print_capturing();
 
-    // Poll for 's' key or duration expiry
+    // Poll for 's' key or duration expiry.
     loop {
-        if terminal::wait_for_stop_key(Duration::from_millis(100))? {
-            // User pressed 's' - stop ffmpeg
+        if key_listener.wait_for_stop_key(Duration::from_millis(100))? {
+            // User pressed 's' - send SIGINT to ffmpeg so it can finalize MP4.
             session.stop()?;
             break;
         }
         if session.check_and_stop_if_expired()? {
-            // Duration expired - ffmpeg should exit naturally, just wait
+            // Duration expired - ffmpeg should exit naturally, just wait.
+            break;
+        }
+        if session.has_exited() {
+            // Do not wait forever if ffmpeg failed before the user pressed 's'.
             break;
         }
     }
 
-    // Wait for ffmpeg to finish and check exit code
+    // Wait for ffmpeg to finish and check its exit code
     session.finish()?;
 
     terminal::print_saved(&path);
