@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::Local;
 use clap::Parser;
 
-use capture::{CaptureSession, CaptureState, RealFfmpegProcess};
+use capture::{CaptureSession, RealFfmpegProcess};
 use cli::{Args, Command, StartArgs};
 use ffmpeg::CaptureConfig;
 use output::OutputConfig;
