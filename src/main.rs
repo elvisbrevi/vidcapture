@@ -12,7 +12,6 @@ use clap::Parser;
 use capture::{CaptureSession, RealFfmpegProcess};
 use cli::{Args, Command, StartArgs};
 use ffmpeg::CaptureConfig;
-use output::OutputConfig;
 
 fn main() {
     let args = Args::parse();
@@ -32,19 +31,10 @@ fn main() {
 }
 
 fn run_capture(args: StartArgs) -> anyhow::Result<()> {
-    // Resolve output directory
-    let dir = match &args.output {
-        Some(path) => output::resolve_output_directory(path)?,
-        None => std::env::current_dir()?,
-    };
-
-    // Generate timestamped filename
+    // Resolve output directory (creating it if -o is set), generate the
+    // timestamped filename, and pick a non-colliding final path.
     let timestamp = Local::now();
-    let config = OutputConfig::new(dir, "vidcapture".to_string());
-    let path = output::generate_filename(&config, &timestamp);
-
-    // Avoid collision
-    let path = output::avoid_collision(&path);
+    let path = output::prepare_output_path(args.output.as_deref(), &timestamp)?;
 
     // Detect avfoundation devices and resolve BlackHole + microphone indices.
     // Required for the mixed-audio capture pipeline from issue #3 (system +
