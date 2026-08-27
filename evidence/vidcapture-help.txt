@@ -1,0 +1,11 @@
+CLI screen and audio recorder for macOS
+
+Usage: vidcapture <COMMAND>
+
+Commands:
+  start  Start capturing screen and audio
+  cut    Cut a range out of an existing video file
+  help   Show help with setup instructions
+
+Options:
+  -h, --help  Print help

@@ -1,0 +1,41 @@
+test cli::tests::cut_validate_from_length_range ... ok
+test cli::tests::cut_validate_defaults_from_zero_with_length ... ok
+test cli::tests::cut_validate_from_to_range ... ok
+test cli::tests::cut_validate_from_greater_than_to_errors ... ok
+test cli::tests::cut_validate_from_equals_to_errors ... ok
+test cli::tests::cut_validate_zero_length_errors ... ok
+test cli::tests::cut_validate_neither_to_nor_length_errors ... ok
+test cli::tests::parse_help_subcommand ... ok
+test cli::tests::parse_positive_timespec_accepts_nonzero ... ok
+test cli::tests::parse_cut_defaults_from_to_zero ... ok
+test cli::tests::parse_cut_with_from_and_to ... ok
+test cli::tests::parse_cut_with_output_and_verbose ... ok
+test cli::tests::parse_cut_both_to_and_length_errors ... ok
+test cli::tests::parse_cut_with_from_and_length ... ok
+test cli::tests::parse_cut_short_flags ... ok
+test cli::tests::parse_no_subcommand_shows_help ... ok
+test cli::tests::parse_positive_timespec_rejects_zero ... ok
+test cli::tests::parse_start_defaults ... ok
+test cli::tests::parse_start_with_duration ... ok
+test cli::tests::parse_start_with_all_flags ... ok
+test cli::tests::parse_timespec_ms_not_confused_with_minutes ... ok
+test cli::tests::parse_start_with_fractional_duration ... ok
+test cli::tests::parse_start_rejects_zero_duration ... ok
+test cli::tests::parse_start_with_interval ... ok
+test cli::tests::parse_timespec_rejects_invalid_input ... ok
+test cli::tests::parse_start_rejects_zero_interval ... ok
+test cli::tests::parse_timespec_rounds_sub_millisecond_fractions ... ok
+test cli::tests::parse_timespec_timestamp_table ... ok
+test cli::tests::parse_timespec_unit_suffixed_table ... ok
+test cli::tests::parse_timespec_zero_is_accepted ... ok
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+test cli::tests::cut_validate_defaults_from_zero_with_length ... ok
+test cli::tests::cut_validate_from_length_range ... ok
+test cli::tests::cut_validate_from_equals_to_errors ... ok
+test cli::tests::cut_validate_neither_to_nor_length_errors ... ok
+test cli::tests::cut_validate_from_greater_than_to_errors ... ok
+test cli::tests::cut_validate_from_to_range ... ok
+test cli::tests::cut_validate_zero_length_errors ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s

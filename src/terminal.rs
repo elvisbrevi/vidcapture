@@ -148,6 +148,7 @@ pub fn format_help() -> String {
 
     help.push_str("COMMANDS:\n");
     help.push_str("    start    Start capturing screen and audio\n");
+    help.push_str("    cut      Cut a range out of an existing video file\n");
     help.push_str("    help     Show this help message with setup instructions\n\n");
 
     help.push_str("FLAGS (start):\n");
@@ -161,6 +162,15 @@ pub fn format_help() -> String {
     help.push_str("                             Example: ./recordings/\n");
     help.push_str("                             Created if it does not exist. Filenames auto-increment on collision.\n");
     help.push_str("    -v, --verbose            Show ffmpeg output while recording.\n\n");
+
+    help.push_str("FLAGS (cut):\n");
+    help.push_str("    <SOURCE>                 Path to the source video file. Required.\n");
+    help.push_str("    -f, --from <TIME>        Start offset of the cut range (default: 0s).\n");
+    help.push_str("    -t, --to <TIME>          End offset of the cut range. Conflicts with --length.\n");
+    help.push_str("    -l, --length <TIME>      Cut length. Conflicts with --to.\n");
+    help.push_str("    -o, --output <PATH>      Output file or directory.\n");
+    help.push_str("        --fast               Stream-copy instead of re-encoding.\n");
+    help.push_str("    -v, --verbose            Show ffmpeg output.\n\n");
 
     help.push_str("DURATION FORMAT:\n");
     help.push_str("    A duration is a sequence of <number><unit> pairs. Units: s (seconds), m (minutes), h (hours).\n");
@@ -197,6 +207,9 @@ pub fn format_help() -> String {
     help.push_str("    vidcapture start -d 1m -e 10s         # 6 segments of 10 seconds, then stop\n");
     help.push_str("    vidcapture start -o ./recordings/     # Save into ./recordings/\n");
     help.push_str("    vidcapture start -v                   # Show ffmpeg output while recording\n");
+    help.push_str("    vidcapture cut talk.mp4 --length 5s   # First 5 seconds\n");
+    help.push_str("    vidcapture cut talk.mp4 --from 10s --to 25s  # From 10s to 25s\n");
+    help.push_str("    vidcapture cut talk.mp4 --from 10s --length 1.5s  # 1.5s starting at 10s\n");
 
     help
 }

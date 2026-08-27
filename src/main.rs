@@ -4,13 +4,14 @@ mod ffmpeg;
 mod output;
 mod terminal;
 
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::Local;
 use clap::Parser;
 
 use capture::{CaptureSession, RealFfmpegProcess};
-use cli::{Args, Command, StartArgs};
+use cli::{Args, Command, CutArgs, StartArgs};
 use ffmpeg::CaptureConfig;
 
 fn main() {
@@ -18,6 +19,7 @@ fn main() {
 
     let result = match args.command {
         Command::Start(start_args) => run_capture(start_args),
+        Command::Cut(cut_args) => run_cut(cut_args),
         Command::Help => {
             terminal::print_help();
             Ok(())
@@ -114,5 +116,74 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
     } else {
         terminal::print_saved(&path);
     }
+    Ok(())
+}
+
+fn run_cut(args: CutArgs) -> anyhow::Result<()> {
+    // Validate source path exists and is a file
+    if !args.source.exists() {
+        anyhow::bail!("Source file not found: {}", args.source.display());
+    }
+    if !args.source.is_file() {
+        anyhow::bail!("Source is not a file: {}", args.source.display());
+    }
+
+    // Validate the cut range
+    let range = args.validate_cut_range().map_err(|e| anyhow::anyhow!(e))?;
+
+    // Determine output path
+    let output_path = match &args.output {
+        Some(path) => path.clone(),
+        None => {
+            // Default: <source>_cut.mp4 next to the source
+            let stem = args
+                .source
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let dir = args
+                .source
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            dir.join(format!("{}_cut.mp4", stem))
+        }
+    };
+
+    // Build ffmpeg command for cutting
+    let start_secs = range.start.as_secs_f64();
+    let length_secs = range.length.as_secs_f64();
+
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y"]);
+    cmd.args(["-ss", &format!("{:.3}", start_secs)]);
+    cmd.args(["-i", &args.source.to_string_lossy()]);
+    cmd.args(["-t", &format!("{:.3}", length_secs)]);
+
+    if args.fast {
+        // Stream-copy instead of re-encoding
+        cmd.args(["-c", "copy"]);
+    } else {
+        // Re-encode with H.264 + AAC
+        cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"]);
+        cmd.args(["-c:a", "aac", "-b:a", "128k"]);
+    }
+
+    cmd.arg(&output_path);
+
+    if args.verbose {
+        // Show ffmpeg output by inheriting stdout/stderr
+        let status = cmd.status()?;
+        if !status.success() {
+            anyhow::bail!("ffmpeg exited with status: {}", status);
+        }
+    } else {
+        let output = cmd.output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("ffmpeg failed:\n{}", stderr);
+        }
+    }
+
+    terminal::print_saved(&output_path);
     Ok(())
 }

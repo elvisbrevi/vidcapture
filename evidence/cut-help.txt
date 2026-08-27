@@ -1,0 +1,15 @@
+Cut a range out of an existing video file
+
+Usage: vidcapture cut [OPTIONS] <SOURCE>
+
+Arguments:
+  <SOURCE>  Path to the source video file
+
+Options:
+  -f, --from <FROM>      Start offset of the cut range (default: 0s) [default: 0s]
+  -t, --to <TO>          End offset of the cut range (conflicts with --length)
+  -l, --length <LENGTH>  Cut length (conflicts with --to)
+  -o, --output <OUTPUT>  Output file or directory
+      --fast             Stream-copy instead of re-encoding
+  -v, --verbose          Show ffmpeg output
+  -h, --help             Print help
