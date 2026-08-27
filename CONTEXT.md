@@ -1,6 +1,6 @@
 # vidcapture
 
-CLI screen and audio recorder for macOS. Captures full screen + system audio + microphone via ffmpeg, with timed and interval-based recording modes.
+CLI screen and audio recorder for macOS. Captures full screen + system audio + microphone via ffmpeg, with timed and interval-based recording modes. It also cuts a range out of an existing video file.
 
 ## Language
 
@@ -28,6 +28,26 @@ _Avoid_: timeout, length
 The time between segment boundaries in interval mode (`-e`). Each segment is this long.
 _Avoid_: frequency, period
 
+**Cut**:
+A single `vidcapture cut` invocation: reads a source video, extracts one cut range, and writes one new MP4. A cut never modifies the source video.
+_Avoid_: trim, clip, edit, splice
+
+**Source video**:
+The existing video file a cut reads from, given as the positional argument to `vidcapture cut`. It may or may not have been produced by vidcapture.
+_Avoid_: input file, original
+
+**Cut range**:
+The portion of the source video a cut extracts, expressed as a start offset (`--from`) plus either an end offset (`--to`) or a cut length (`--length`). Offsets are measured from the beginning of the source video.
+_Avoid_: selection, window, slice
+
+**Cut length**:
+How long the cut range lasts (`--length`). Equivalent to `--to` minus `--from`; the two ways of expressing a cut range are mutually exclusive.
+_Avoid_: size, amount
+
+**Timespec**:
+A user-supplied point in time or span of time, accepted anywhere the CLI takes a time value. Two notations: unit-suffixed (`10s`, `1500ms`, `1h30m`, `1.5s`) and timestamp (`00:01:30.500`). Resolved to millisecond precision.
+_Avoid_: duration string, time format
+
 ### Example dialogue
 
 > **Dev**: "When a user starts a capture session with `-e 10s`, how many segments do we get?"
@@ -37,3 +57,11 @@ _Avoid_: frequency, period
 > **Dev**: "And each segment is a standalone MP4?"
 >
 > **Domain expert**: "Yes — ffmpeg's segment muxer handles the splitting. No gaps between segments."
+>
+> **Dev**: "And `vidcapture cut talk.mp4 --from 1m --length 1500ms`?"
+>
+> **Domain expert**: "One cut. The cut range starts one minute into the source video and its cut length is a second and a half. We write `talk_cut.mp4` next to the source and leave `talk.mp4` untouched."
+>
+> **Dev**: "What if they pass both `--to` and `--length`?"
+>
+> **Domain expert**: "That's an error. A cut range is either an end offset or a cut length, never both."
