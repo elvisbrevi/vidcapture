@@ -1,0 +1,187 @@
+warning: method `take_stderr` is never used
+  --> src/capture.rs:16:8
+   |
+11 | pub trait FfmpegProcess {
+   |           ------------- method in this trait
+...
+16 |     fn take_stderr(&mut self) -> Option<Vec<u8>>;
+   |        ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: variant `Error` is never constructed
+   --> src/capture.rs:105:5
+    |
+101 | pub enum CaptureState {
+    |          ------------ variant in this enum
+...
+105 |     Error(String),
+    |     ^^^^^
+    |
+    = note: `CaptureState` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `state` is never used
+   --> src/capture.rs:151:12
+    |
+117 | impl CaptureSession {
+    | ------------------- method in this implementation
+...
+151 |     pub fn state(&self) -> &CaptureState {
+    |            ^^^^^
+
+warning: function `generate_segment_filename` is never used
+  --> src/output.rs:52:8
+   |
+52 | pub fn generate_segment_filename(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `wait_for_stop_key` is never used
+   --> src/terminal.rs:123:8
+    |
+123 | pub fn wait_for_stop_key(timeout: Duration) -> anyhow::Result<bool> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: `vidcapture` (bin "vidcapture") generated 5 warnings
+warning: `vidcapture` (bin "vidcapture" test) generated 3 warnings (3 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/main.rs (target/debug/deps/vidcapture-df5cf29532abf7cb)
+
+running 125 tests
+test capture::tests::capture_loop_can_detect_an_early_process_exit ... ok
+test capture::tests::cannot_stop_when_not_running ... ok
+test capture::tests::duration_not_expired_without_duration ... ok
+test capture::tests::cannot_start_twice ... ok
+test capture::tests::duration_returns_configured_duration ... ok
+test capture::tests::duration_not_expired_before_time ... ok
+test capture::tests::check_and_stop_if_expired_returns_false_when_not_expired ... ok
+test capture::tests::duration_returns_none_when_unset ... ok
+test capture::tests::elapsed_is_zero_before_start ... ok
+test capture::tests::finish_accepts_the_exit_code_from_an_interrupted_capture ... ok
+test capture::tests::finish_succeeds_on_zero_exit ... ok
+test capture::tests::session_starts_in_idle_state ... ok
+test capture::tests::session_start_spawns_process ... ok
+test capture::tests::session_stop_requests_process_stop ... ok
+test cli::tests::cut_validate_from_to_range ... ok
+test cli::tests::cut_validate_defaults_from_zero_with_length ... ok
+test cli::tests::cut_validate_from_length_range ... ok
+test cli::tests::cut_validate_from_greater_than_to_errors ... ok
+test cli::tests::cut_validate_from_equals_to_errors ... ok
+test cli::tests::cut_validate_zero_length_errors ... ok
+test cli::tests::cut_validate_neither_to_nor_length_errors ... ok
+test cli::tests::parse_cut_defaults_from_to_zero ... ok
+test cli::tests::parse_cut_with_from_and_to ... ok
+test cli::tests::parse_cut_with_output_and_verbose ... ok
+test cli::tests::parse_cut_both_to_and_length_errors ... ok
+test cli::tests::parse_positive_timespec_accepts_nonzero ... ok
+test cli::tests::parse_help_subcommand ... ok
+test cli::tests::parse_cut_short_flags ... ok
+test cli::tests::parse_cut_with_from_and_length ... ok
+test cli::tests::parse_positive_timespec_rejects_zero ... ok
+test cli::tests::parse_start_defaults ... ok
+test cli::tests::parse_no_subcommand_shows_help ... ok
+test cli::tests::parse_start_rejects_zero_duration ... ok
+test cli::tests::parse_start_rejects_zero_interval ... ok
+test cli::tests::parse_timespec_ms_not_confused_with_minutes ... ok
+test cli::tests::parse_start_with_duration ... ok
+test cli::tests::parse_timespec_rejects_invalid_input ... ok
+test cli::tests::parse_start_with_interval ... ok
+test cli::tests::parse_timespec_timestamp_table ... ok
+test cli::tests::parse_timespec_rounds_sub_millisecond_fractions ... ok
+test cli::tests::parse_timespec_unit_suffixed_table ... ok
+test cli::tests::parse_timespec_zero_is_accepted ... ok
+test cli::tests::parse_start_with_fractional_duration ... ok
+test ffmpeg::tests::audio_capture_emits_aac_codec ... ok
+test ffmpeg::tests::audio_capture_mixes_streams_with_amix_filter ... ok
+test ffmpeg::tests::audio_capture_resamples_each_input_for_sync ... ok
+test ffmpeg::tests::audio_capture_maps_video_and_mixed_audio ... ok
+test cli::tests::parse_start_with_all_flags ... ok
+test ffmpeg::tests::audio_capture_uses_two_avfoundation_inputs ... ok
+test ffmpeg::tests::blackhole_setup_instructions_mentions_install_steps ... ok
+test ffmpeg::tests::capture_with_duration ... ok
+test ffmpeg::tests::capture_command_overwrite_flag ... ok
+test ffmpeg::tests::capture_with_fractional_duration ... ok
+test ffmpeg::tests::capture_with_duration_and_interval ... ok
+test ffmpeg::tests::capture_with_interval_force_keyframes_align_to_segment_boundary ... ok
+test ffmpeg::tests::capture_with_interval_resets_timestamps_for_each_segment ... ok
+test ffmpeg::tests::capture_with_interval_segment_pattern_uses_three_digit_padding ... ok
+test ffmpeg::tests::capture_without_interval_omits_seamless_split_flags ... ok
+test ffmpeg::tests::capture_with_interval ... ok
+test ffmpeg::tests::cut_default_reencodes_with_h264_and_aac ... ok
+test ffmpeg::tests::cut_fast_uses_stream_copy ... ok
+test ffmpeg::tests::cut_source_and_output_in_command ... ok
+test ffmpeg::tests::detect_audio_setup_live ... ignored, live test against the host's ffmpeg binary
+test ffmpeg::tests::detect_avfoundation_devices_live ... ignored, live test against the host's ffmpeg binary
+test ffmpeg::tests::cut_time_values_have_three_decimals ... ok
+test ffmpeg::tests::cut_subsecond_offset_survives ... ok
+test ffmpeg::tests::cut_overwrite_flag ... ok
+test ffmpeg::tests::find_blackhole_accepts_2ch_case_insensitively ... ok
+test ffmpeg::tests::find_blackhole_missing_returns_none ... ok
+test ffmpeg::tests::find_blackhole_requires_2ch_specifically ... ok
+test ffmpeg::tests::find_blackhole_returns_index_in_listing ... ok
+test ffmpeg::tests::find_microphone_falls_back_to_first_non_blackhole ... ok
+test ffmpeg::tests::find_microphone_prefers_named_mic_over_virtual_input ... ok
+test ffmpeg::tests::find_microphone_returns_none_if_only_blackhole ... ok
+test ffmpeg::tests::find_microphone_skips_blackhole ... ok
+test ffmpeg::tests::parse_avfoundation_listing_empty_input ... ok
+test ffmpeg::tests::parse_avfoundation_listing_extracts_video_and_audio ... ok
+test ffmpeg::tests::parse_avfoundation_listing_handles_missing_sections ... ok
+test ffmpeg::tests::parse_avfoundation_listing_handles_only_audio ... ok
+test ffmpeg::tests::segment_pattern_generation ... ok
+test ffmpeg::tests::screen_capture_uses_full_screen_video_input ... ok
+test ffmpeg::tests::segment_pattern_with_directory ... ok
+test ffmpeg::tests::simple_capture_command ... ok
+test output::tests::no_collision_returns_original_path ... ok
+test output::tests::prepare_output_path_rejects_existing_file_with_clear_message ... ok
+test output::tests::prepare_output_path_creates_missing_directory ... ok
+test output::tests::prepare_output_path_uses_cwd_by_default ... ok
+test output::tests::prepare_output_path_auto_increments_on_collision ... ok
+test output::tests::prepare_output_path_resolves_relative_paths_against_cwd ... ok
+test output::tests::resolve_existing_directory ... ok
+test output::tests::resolve_creates_missing_directory ... ok
+test output::tests::prepare_output_path_creates_nested_missing_directories ... ok
+test output::tests::segment_display_pattern_uses_glob ... ok
+test output::tests::resolve_output_directory_reports_create_failures_with_path ... ok
+test output::tests::resolve_rejects_file_path ... ok
+test output::tests::segment_ffmpeg_pattern_handles_no_extension ... ok
+test output::tests::segment_ffmpeg_pattern_uses_three_digit_padding ... ok
+test output::tests::collision_appends_increment ... ok
+test output::tests::segment_filename_format ... ok
+test output::tests::segment_filename_padded_number ... ok
+test terminal::tests::format_capture_status_remaining_does_not_go_negative ... ok
+test output::tests::single_segment_filename_format ... ok
+test terminal::tests::format_capture_status_with_long_duration_uses_hours_form ... ok
+test terminal::tests::format_capture_status_with_duration_includes_remaining ... ok
+test terminal::tests::format_capture_status_without_duration_omits_remaining ... ok
+test terminal::tests::format_help_documents_default_output_directory ... ok
+test terminal::tests::format_help_documents_duration_format_compound_examples ... ok
+test terminal::tests::format_help_documents_every_flag_with_examples ... ok
+test terminal::tests::format_help_documents_duration_flag_with_examples ... ok
+test terminal::tests::format_help_documents_output_flag_with_examples ... ok
+test terminal::tests::format_help_documents_help_command ... ok
+test terminal::tests::format_help_documents_start_command ... ok
+test terminal::tests::format_help_documents_verbose_flag ... ok
+test terminal::tests::format_help_documents_short_help_flag ... ok
+test terminal::tests::format_help_includes_examples_section ... ok
+test terminal::tests::format_help_includes_blackhole_setup_instructions ... ok
+test terminal::tests::format_help_includes_ffmpeg_install_instructions ... ok
+test terminal::tests::format_help_returns_non_empty_string ... ok
+test terminal::tests::format_status_duration_full_hours_minutes_seconds ... ok
+test terminal::tests::format_help_includes_list_devices_check ... ok
+test terminal::tests::format_status_duration_minutes_and_seconds ... ok
+test terminal::tests::format_status_duration_seconds_only ... ok
+test terminal::tests::stop_key_listener_returns_false_without_a_ready_key ... ok
+test capture::tests::elapsed_grows_after_start ... ok
+test capture::tests::check_and_stop_if_expired_stops_when_expired ... ok
+
+test result: ok. 123 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cli.rs (target/debug/deps/cli-b389b146117c71ad)
+
+running 4 tests
+test no_subcommand_shows_help ... ok
+test invalid_subcommand_shows_error_and_help ... ok
+test start_subcommand_is_recognized ... ok
+test help_subcommand_describes_commands_and_flags ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
