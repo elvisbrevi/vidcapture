@@ -4,7 +4,6 @@ mod ffmpeg;
 mod output;
 mod terminal;
 
-use std::path::Path;
 use std::time::Duration;
 
 use chrono::Local;
@@ -129,21 +128,7 @@ fn run_cut(args: CutArgs) -> anyhow::Result<()> {
 
     let range = args.validate_cut_range().map_err(|e| anyhow::anyhow!(e))?;
 
-    let output_path = match &args.output {
-        Some(path) => path.clone(),
-        None => {
-            let stem = args
-                .source
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
-            let dir = args
-                .source
-                .parent()
-                .unwrap_or_else(|| Path::new("."));
-            dir.join(format!("{}_cut.mp4", stem))
-        }
-    };
+    let output_path = output::resolve_cut_output_path(&args.source, args.output.as_deref())?;
 
     let config = CutConfig::new(
         args.source.to_string_lossy().to_string(),

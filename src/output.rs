@@ -122,6 +122,67 @@ pub fn resolve_output_directory(path: &Path) -> anyhow::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Resolve the output path for a cut operation.
+///
+/// Rules:
+/// - No output: `<source-stem>_cut.mp4` beside the source.
+/// - Output is a directory (exists+is_dir or ends with separator): put
+///   `<source-stem>_cut.mp4` inside it, creating the dir if missing.
+/// - Output is a file path: use it directly; parent must exist.
+/// - Always `.mp4` regardless of source container.
+/// - Refuse to overwrite the source video.
+/// - Apply `avoid_collision` to prevent overwriting existing files.
+pub fn resolve_cut_output_path(source: &Path, output: Option<&Path>) -> anyhow::Result<PathBuf> {
+    let source_stem = source
+        .file_stem()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine source file name: {}", source.display()))?
+        .to_string_lossy();
+
+    let resolved = match output {
+        None => {
+            let dir = source.parent().unwrap_or(Path::new("."));
+            dir.join(format!("{}_cut.mp4", source_stem))
+        }
+        Some(path) => {
+            let is_dir = (path.exists() && path.is_dir())
+                || path.to_string_lossy().ends_with('/')
+                || path.to_string_lossy().ends_with('\\');
+            if is_dir {
+                let dir = resolve_output_directory(path)?;
+                dir.join(format!("{}_cut.mp4", source_stem))
+            } else {
+                let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+                if let Some(parent) = parent
+                    && !parent.exists()
+                {
+                    anyhow::bail!(
+                        "Output path parent directory does not exist: {}",
+                        path.display()
+                    );
+                }
+                let mut p = path.to_path_buf();
+                p.set_extension("mp4");
+                p
+            }
+        }
+    };
+
+    let canonical_source = source
+        .canonicalize()
+        .unwrap_or_else(|_| source.to_path_buf());
+    let canonical_output = resolved
+        .canonicalize()
+        .unwrap_or_else(|_| resolved.to_path_buf());
+    if canonical_source == canonical_output {
+        anyhow::bail!(
+            "Refusing to overwrite source video: {}",
+            source.display()
+        );
+    }
+
+    Ok(avoid_collision(&resolved))
+}
+
 /// Find a non-colliding filename by appending _1, _2, etc. if the file exists.
 pub fn avoid_collision(path: &Path) -> PathBuf {
     if !path.exists() {
@@ -497,5 +558,182 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&blocker);
+    }
+
+    // ---- resolve_cut_output_path (issue #19 acceptance criteria) ----
+
+    #[test]
+    fn cut_no_output_resolves_to_source_stem_cut_mp4() {
+        let source = PathBuf::from("/videos/talk.mp4");
+        let result = resolve_cut_output_path(&source, None).unwrap();
+        assert_eq!(result, PathBuf::from("/videos/talk_cut.mp4"));
+    }
+
+    #[test]
+    fn cut_output_directory_resolves_inside() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_dir_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.parent().unwrap().join("talk.mp4");
+        let result = resolve_cut_output_path(&source, Some(&dir)).unwrap();
+        assert_eq!(
+            result,
+            dir.join("talk_cut.mp4"),
+            "should place talk_cut.mp4 inside the output directory"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_directory_with_trailing_slash_resolves_as_dir() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_slash_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        // Don't create it — the trailing slash should trigger directory creation.
+        let mut path_with_slash = dir.to_path_buf();
+        path_with_slash.push("");
+
+        let source = dir.parent().unwrap().join("talk.mp4");
+        let result = resolve_cut_output_path(&source, Some(&path_with_slash)).unwrap();
+        assert!(dir.is_dir(), "directory should be created from trailing slash");
+        assert_eq!(result, dir.join("talk_cut.mp4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_missing_dir_with_trailing_slash_creates() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_create_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut path_with_slash = dir.to_path_buf();
+        path_with_slash.push("");
+
+        let source = dir.parent().unwrap().join("talk.mp4");
+        let result = resolve_cut_output_path(&source, Some(&path_with_slash)).unwrap();
+        assert!(dir.is_dir(), "missing output directory should be created from trailing slash");
+        assert_eq!(result, dir.join("talk_cut.mp4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_file_path_used_directly() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_file_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mp4");
+        let output = dir.join("clip.mp4");
+        let result = resolve_cut_output_path(&source, Some(&output)).unwrap();
+        assert_eq!(result, output, "should use the exact file path provided");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_refuses_to_overwrite_source() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_overwrite_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mp4");
+        std::fs::write(&source, "").unwrap();
+
+        let err = resolve_cut_output_path(&source, Some(&source)).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Refusing to overwrite source video"),
+            "error must refuse source overwrite, got: {}",
+            msg
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_force_mp4_extension() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_ext_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mov");
+        let output = dir.join("clip.mp4");
+        let result = resolve_cut_output_path(&source, Some(&output)).unwrap();
+        assert!(
+            result.extension().map(|e| e == "mp4").unwrap_or(false),
+            "output must be .mp4 regardless of source, got: {}",
+            result.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_no_flag_yields_mp4_even_for_mov_source() {
+        let source = PathBuf::from("/videos/talk.mov");
+        let result = resolve_cut_output_path(&source, None).unwrap();
+        assert!(
+            result.extension().map(|e| e == "mp4").unwrap_or(false),
+            "default output must be .mp4 for .mov source, got: {}",
+            result.display()
+        );
+        assert_eq!(result, PathBuf::from("/videos/talk_cut.mp4"));
+    }
+
+    #[test]
+    fn cut_output_auto_increments_on_collision() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_collision_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mp4");
+        std::fs::write(&source, "").unwrap();
+
+        let p1 = resolve_cut_output_path(&source, None).unwrap();
+        assert_eq!(p1, dir.join("talk_cut.mp4"));
+        std::fs::write(&p1, "").unwrap();
+
+        let p2 = resolve_cut_output_path(&source, None).unwrap();
+        assert_eq!(p2, dir.join("talk_cut_1.mp4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cut_output_parent_not_exists_errors() {
+        let source = PathBuf::from("/videos/talk.mp4");
+        let output = PathBuf::from("/nonexistent_dir/clip.mp4");
+        let err = resolve_cut_output_path(&source, Some(&output)).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("parent directory does not exist"),
+            "error must report missing parent, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains(output.to_str().unwrap()),
+            "error must name the requested path, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn cut_output_existing_file_treated_as_file_not_dir() {
+        let dir = std::env::temp_dir().join("vidcapture_cut_file_as_dir_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mp4");
+        let existing_file = dir.join("existing_file.mp4");
+        std::fs::write(&existing_file, "").unwrap();
+
+        // Pass the existing file as output — it should be treated as a file
+        // path, not a directory. Since it already exists, avoid_collision
+        // renames it to _1.
+        let result = resolve_cut_output_path(&source, Some(&existing_file)).unwrap();
+        assert_eq!(result, dir.join("existing_file_1.mp4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
