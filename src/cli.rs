@@ -17,6 +17,8 @@ pub struct Args {
 pub enum Command {
     /// Start capturing screen and audio
     Start(StartArgs),
+    /// Cut a range out of an existing video file
+    Cut(CutArgs),
     /// Show help with setup instructions
     Help,
 }
@@ -38,6 +40,96 @@ pub struct StartArgs {
     /// Show ffmpeg output (shortcut for RUST_LOG debug)
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct CutArgs {
+    /// Path to the source video file
+    pub source: PathBuf,
+
+    /// Start offset of the cut range (default: 0s)
+    #[arg(short, long, value_parser = parse_timespec, default_value = "0s")]
+    pub from: Duration,
+
+    /// End offset of the cut range (conflicts with --length)
+    #[arg(short, long, value_parser = parse_positive_timespec, conflicts_with = "length")]
+    pub to: Option<Duration>,
+
+    /// Cut length (conflicts with --to)
+    #[arg(short, long, value_parser = parse_positive_timespec, conflicts_with = "to")]
+    pub length: Option<Duration>,
+
+    /// Output file or directory
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Stream-copy instead of re-encoding
+    #[arg(long)]
+    pub fast: bool,
+
+    /// Show ffmpeg output
+    #[arg(short, long)]
+    pub verbose: bool,
+}
+
+/// Validated cut range: a start offset and a length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CutRange {
+    pub start: Duration,
+    pub length: Duration,
+}
+
+impl CutArgs {
+    /// Validate the cut arguments and return a normalized cut range.
+    ///
+    /// Returns an error if:
+    /// - Neither `--to` nor `--length` is provided
+    /// - `--from` >= `--to`
+    /// - `--length` is zero
+    pub fn validate_cut_range(&self) -> Result<CutRange, String> {
+        let length = match (self.to, self.length) {
+            (None, None) => {
+                return Err(
+                    "Neither --to nor --length specified. \
+                     One of them is required."
+                        .to_string(),
+                );
+            }
+            (Some(to), None) => {
+                if self.from >= to {
+                    return Err(format!(
+                        "--from ({}) must be less than --to ({})",
+                        format_duration(self.from),
+                        format_duration(to),
+                    ));
+                }
+                to - self.from
+            }
+            (None, Some(len)) => {
+                if len.is_zero() {
+                    return Err("--length must be greater than zero".to_string());
+                }
+                len
+            }
+            // Both --to and --length: clap's conflicts_with prevents this.
+            (Some(_), Some(_)) => unreachable!("clap conflicts_with should have rejected this"),
+        };
+
+        Ok(CutRange {
+            start: self.from,
+            length,
+        })
+    }
+}
+
+/// Format a duration for user-facing error messages.
+fn format_duration(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    if secs.fract() == 0.0 && secs < 60.0 {
+        format!("{}s", secs as u64)
+    } else {
+        format!("{:.3}s", secs)
+    }
 }
 
 /// Parse a timespec into a `std::time::Duration`, at millisecond precision.
@@ -295,7 +387,7 @@ mod tests {
                 assert_eq!(start_args.output, None);
                 assert!(!start_args.verbose);
             }
-            Command::Help => panic!("expected Start command, got Help"),
+            _ => panic!("expected Start command"),
         }
     }
 
@@ -306,7 +398,7 @@ mod tests {
             Command::Start(start_args) => {
                 assert_eq!(start_args.duration, Some(Duration::from_millis(1_500)));
             }
-            Command::Help => panic!("expected Start command, got Help"),
+            _ => panic!("expected Start command"),
         }
     }
 
@@ -332,7 +424,7 @@ mod tests {
                 assert_eq!(start_args.output, None);
                 assert!(!start_args.verbose);
             }
-            Command::Help => panic!("expected Start command, got Help"),
+            _ => panic!("expected Start command"),
         }
     }
 
@@ -344,7 +436,7 @@ mod tests {
                 assert_eq!(start_args.duration, None);
                 assert_eq!(start_args.every, Some(Duration::from_secs(30)));
             }
-            Command::Help => panic!("expected Start command, got Help"),
+            _ => panic!("expected Start command"),
         }
     }
 
@@ -369,7 +461,7 @@ mod tests {
                 assert_eq!(start_args.output, Some(PathBuf::from("/tmp/output")));
                 assert!(start_args.verbose);
             }
-            Command::Help => panic!("expected Start command, got Help"),
+            _ => panic!("expected Start command"),
         }
     }
 
@@ -384,5 +476,185 @@ mod tests {
         // clap's default behavior is to print help and exit when no subcommand is provided.
         let result = Args::try_parse_from(["vidcapture"]);
         assert!(result.is_err(), "expected error when no subcommand given");
+    }
+
+    // ---- cut subcommand tests (issue #17) ----
+
+    #[test]
+    fn parse_cut_with_from_and_to() {
+        let args = Args::try_parse_from(["vidcapture", "cut", "talk.mp4", "--from", "10s", "--to", "25s"]).unwrap();
+        match args.command {
+            Command::Cut(cut_args) => {
+                assert_eq!(cut_args.from, Duration::from_secs(10));
+                assert_eq!(cut_args.to, Some(Duration::from_secs(25)));
+                assert_eq!(cut_args.length, None);
+            }
+            _ => panic!("expected Cut command"),
+        }
+    }
+
+    #[test]
+    fn parse_cut_with_from_and_length() {
+        let args = Args::try_parse_from(["vidcapture", "cut", "talk.mp4", "--from", "10s", "--length", "1500ms"]).unwrap();
+        match args.command {
+            Command::Cut(cut_args) => {
+                assert_eq!(cut_args.from, Duration::from_secs(10));
+                assert_eq!(cut_args.to, None);
+                assert_eq!(cut_args.length, Some(Duration::from_millis(1500)));
+            }
+            _ => panic!("expected Cut command"),
+        }
+    }
+
+    #[test]
+    fn parse_cut_defaults_from_to_zero() {
+        let args = Args::try_parse_from(["vidcapture", "cut", "talk.mp4", "--length", "5s"]).unwrap();
+        match args.command {
+            Command::Cut(cut_args) => {
+                assert_eq!(cut_args.from, Duration::ZERO);
+                assert_eq!(cut_args.length, Some(Duration::from_secs(5)));
+            }
+            _ => panic!("expected Cut command"),
+        }
+    }
+
+    #[test]
+    fn parse_cut_short_flags() {
+        let args = Args::try_parse_from(["vidcapture", "cut", "talk.mp4", "-f", "10s", "-t", "25s"]).unwrap();
+        match args.command {
+            Command::Cut(cut_args) => {
+                assert_eq!(cut_args.from, Duration::from_secs(10));
+                assert_eq!(cut_args.to, Some(Duration::from_secs(25)));
+            }
+            _ => panic!("expected Cut command"),
+        }
+    }
+
+    #[test]
+    fn parse_cut_both_to_and_length_errors() {
+        let result = Args::try_parse_from([
+            "vidcapture", "cut", "talk.mp4", "--to", "25s", "--length", "5s",
+        ]);
+        assert!(result.is_err(), "expected --to and --length to conflict");
+    }
+
+    #[test]
+    fn parse_cut_with_output_and_verbose() {
+        let args = Args::try_parse_from([
+            "vidcapture", "cut", "talk.mp4", "--length", "5s", "-o", "out.mp4", "-v", "--fast",
+        ])
+        .unwrap();
+        match args.command {
+            Command::Cut(cut_args) => {
+                assert_eq!(cut_args.output, Some(PathBuf::from("out.mp4")));
+                assert!(cut_args.verbose);
+                assert!(cut_args.fast);
+            }
+            _ => panic!("expected Cut command"),
+        }
+    }
+
+    #[test]
+    fn cut_validate_neither_to_nor_length_errors() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::ZERO,
+            to: None,
+            length: None,
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        assert!(cut_args.validate_cut_range().is_err());
+    }
+
+    #[test]
+    fn cut_validate_from_greater_than_to_errors() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::from_secs(25),
+            to: Some(Duration::from_secs(10)),
+            length: None,
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        assert!(cut_args.validate_cut_range().is_err());
+    }
+
+    #[test]
+    fn cut_validate_from_equals_to_errors() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::from_secs(10),
+            to: Some(Duration::from_secs(10)),
+            length: None,
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        assert!(cut_args.validate_cut_range().is_err());
+    }
+
+    #[test]
+    fn cut_validate_zero_length_errors() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::ZERO,
+            to: None,
+            length: Some(Duration::ZERO),
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        assert!(cut_args.validate_cut_range().is_err());
+    }
+
+    #[test]
+    fn cut_validate_from_to_range() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::from_secs(10),
+            to: Some(Duration::from_secs(25)),
+            length: None,
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        let range = cut_args.validate_cut_range().unwrap();
+        assert_eq!(range.start, Duration::from_secs(10));
+        assert_eq!(range.length, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn cut_validate_from_length_range() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::from_secs(10),
+            to: None,
+            length: Some(Duration::from_millis(1500)),
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        let range = cut_args.validate_cut_range().unwrap();
+        assert_eq!(range.start, Duration::from_secs(10));
+        assert_eq!(range.length, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn cut_validate_defaults_from_zero_with_length() {
+        let cut_args = CutArgs {
+            source: PathBuf::from("talk.mp4"),
+            from: Duration::ZERO,
+            to: None,
+            length: Some(Duration::from_secs(5)),
+            output: None,
+            fast: false,
+            verbose: false,
+        };
+        let range = cut_args.validate_cut_range().unwrap();
+        assert_eq!(range.start, Duration::ZERO);
+        assert_eq!(range.length, Duration::from_secs(5));
     }
 }
