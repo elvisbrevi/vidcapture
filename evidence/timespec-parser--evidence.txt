@@ -1,0 +1,71 @@
+$ cargo test --bin vidcapture 2>&1
+running 104 tests (unit tests)
+
+--- cli::tests ---
+
+parse_timespec_unit_suffixed_table .............. ok
+parse_timespec_timestamp_table .................. ok
+parse_timespec_ms_not_confused_with_minutes ..... ok
+parse_timespec_rounds_sub_millisecond_fractions . ok
+parse_timespec_rejects_invalid_input ............ ok
+parse_timespec_zero_is_accepted ................. ok
+parse_positive_timespec_rejects_zero ............ ok
+parse_positive_timespec_accepts_nonzero ......... ok
+parse_start_with_duration ...................... ok
+parse_start_with_fractional_duration ........... ok
+parse_start_rejects_zero_duration .............. ok
+parse_start_rejects_zero_interval .............. ok
+parse_start_defaults ........................... ok
+parse_start_with_interval ...................... ok
+parse_start_with_all_flags ..................... ok
+parse_help_subcommand .......................... ok
+parse_no_subcommand_shows_help ................. ok
+
+--- ffmpeg::tests (fractional duration) ---
+
+capture_with_duration ......................... ok
+capture_with_fractional_duration .............. ok
+capture_with_interval ......................... ok
+capture_with_duration_and_interval ............ ok
+
+--- All 104 unit tests pass, 2 ignored (live ffmpeg) ---
+
+test result: ok. 104 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+
+$ cargo test --test cli 2>&1
+running 4 integration tests
+
+start_subcommand_is_recognized ................. ok
+invalid_subcommand_shows_error_and_help ........ ok
+help_subcommand_describes_commands_and_flags ... ok
+no_subcommand_shows_help ....................... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+$ ./target/debug/vidcapture start -d 0s
+error: invalid value '0s' for '--duration <DURATION>': Timespec must be greater than zero, got: '0s'
+EXIT: 2
+
+$ ./target/debug/vidcapture start -e 0s
+error: invalid value '0s' for '--every <EVERY>': Timespec must be greater than zero, got: '0s'
+EXIT: 2
+
+$ ./target/debug/vidcapture start -d 10x
+error: invalid value '10x' for '--duration <DURATION>': Unknown timespec unit: 'x'
+EXIT: 2
+
+$ ./target/debug/vidcapture start -d abcs
+error: invalid value 'abcs' for '--duration <DURATION>': Invalid timespec: 'abcs'
+EXIT: 2
+
+$ ./target/debug/vidcapture start --help
+Start capturing screen and audio
+
+Usage: vidcapture start [OPTIONS]
+
+Options:
+  -d, --duration <DURATION>  Capture duration (e.g., 10s, 1.5s, 1500ms, 1h30m, 00:01:30.500)
+  -e, --every <EVERY>        Interval mode — split into segments of this duration (e.g., 10s, 2m)
+  -o, --output <OUTPUT>      Output directory (default: current directory)
+  -v, --verbose              Show ffmpeg output (shortcut for RUST_LOG debug)
+  -h, --help                 Print help

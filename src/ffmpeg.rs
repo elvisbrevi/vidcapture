@@ -58,6 +58,12 @@ impl CaptureConfig {
     }
 }
 
+/// Format a `Duration` as seconds with three decimals (`10.500`), the
+/// fractional-seconds form ffmpeg's `-t` and `-segment_time` expect.
+fn format_seconds(duration: Duration) -> String {
+    format!("{:.3}", duration.as_secs_f64())
+}
+
 /// Build an ffmpeg command for screen + (optional) audio capture.
 ///
 /// With `audio = Some(...)`, builds a two-input avfoundation command that
@@ -110,7 +116,7 @@ pub fn build_capture_command(config: &CaptureConfig) -> Command {
 
     // Duration limit
     if let Some(duration) = config.duration {
-        cmd.args(["-t", &duration.as_secs().to_string()]);
+        cmd.args(["-t", &format_seconds(duration)]);
     }
 
     // Interval mode: use segment muxer. The flags below give us a seamless
@@ -118,7 +124,7 @@ pub fn build_capture_command(config: &CaptureConfig) -> Command {
     // keyframes are forced exactly at the segment boundary so the muxer can
     // cut without losing frames.
     let output_path = if let Some(interval) = config.interval {
-        let interval_secs = interval.as_secs().to_string();
+        let interval_secs = format_seconds(interval);
         cmd.args([
             "-f",
             "segment",
@@ -535,7 +541,21 @@ mod tests {
 
         // Find -t flag and its value
         let t_pos = args.iter().position(|a| a == "-t").expect("-t flag not found");
-        assert_eq!(args[t_pos + 1], "10");
+        assert_eq!(args[t_pos + 1], "10.000");
+    }
+
+    #[test]
+    fn capture_with_fractional_duration() {
+        let config = base_config().with_duration(Duration::from_millis(1_500));
+        let cmd = build_capture_command(&config);
+        let args = get_args(&cmd);
+
+        let t_pos = args.iter().position(|a| a == "-t").expect("-t flag not found");
+        assert_eq!(
+            args[t_pos + 1],
+            "1.500",
+            "1.5s duration must be passed to ffmpeg as fractional seconds, not truncated to 1"
+        );
     }
 
     #[test]
@@ -552,7 +572,7 @@ mod tests {
             .iter()
             .position(|a| a == "-segment_time")
             .expect("-segment_time not found");
-        assert_eq!(args[st_pos + 1], "30");
+        assert_eq!(args[st_pos + 1], "30.000");
 
         // Check segment output pattern exists in args
         let has_segment_pattern = args.iter().any(|a| a.contains("seg%03d"));
@@ -569,14 +589,14 @@ mod tests {
 
         // Check duration
         let t_pos = args.iter().position(|a| a == "-t").expect("-t flag not found");
-        assert_eq!(args[t_pos + 1], "60");
+        assert_eq!(args[t_pos + 1], "60.000");
 
         // Check interval
         let st_pos = args
             .iter()
             .position(|a| a == "-segment_time")
             .expect("-segment_time not found");
-        assert_eq!(args[st_pos + 1], "10");
+        assert_eq!(args[st_pos + 1], "10.000");
     }
 
     #[test]
@@ -630,7 +650,7 @@ mod tests {
         // expression like `expr:gte(t,10)` would force a single keyframe
         // and never another, breaking the seamless-split guarantee.
         assert_eq!(
-            expr, "expr:gte(t,n_forced*10)",
+            expr, "expr:gte(t,n_forced*10.000)",
             "force_key_frames must use n_forced*<interval> for repeated boundaries, got: {}",
             expr
         );
