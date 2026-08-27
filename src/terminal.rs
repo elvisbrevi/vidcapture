@@ -170,16 +170,29 @@ pub fn format_help() -> String {
     help.push_str("    -l, --length <TIME>      Cut length. Conflicts with --to.\n");
     help.push_str("    -o, --output <PATH>      Output file or directory.\n");
     help.push_str("        --fast               Stream-copy instead of re-encoding.\n");
-    help.push_str("    -v, --verbose            Show ffmpeg output.\n\n");
+    help.push_str("    -v, --verbose            Show ffmpeg output.\n");
+    help.push_str("                             Requires ffmpeg but not BlackHole.\n\n");
 
     help.push_str("DURATION FORMAT:\n");
-    help.push_str("    A duration is a sequence of <number><unit> pairs. Units: s (seconds), m (minutes), h (hours).\n");
-    help.push_str("    Examples:\n");
-    help.push_str("        10s       10 seconds\n");
-    help.push_str("        2m        2 minutes\n");
-    help.push_str("        1h        1 hour\n");
-    help.push_str("        1h30m     1 hour 30 minutes\n");
-    help.push_str("        1h30m10s  1 hour 30 minutes 10 seconds\n\n");
+    help.push_str("    A timespec is one of two notations:\n");
+    help.push('\n');
+    help.push_str("    Unit-suffixed: a sequence of <number><unit> pairs.\n");
+    help.push_str("        Units: h (hours), m (minutes), s (seconds), ms (milliseconds).\n");
+    help.push_str("        Decimals are allowed: 1.5s = 1500ms, 0.25m = 15s.\n");
+    help.push_str("        Examples:\n");
+    help.push_str("            10s         10 seconds\n");
+    help.push_str("            1500ms      1.5 seconds\n");
+    help.push_str("            1.5s        1.5 seconds\n");
+    help.push_str("            2m          2 minutes\n");
+    help.push_str("            1h          1 hour\n");
+    help.push_str("            1h30m       1 hour 30 minutes\n");
+    help.push_str("            1h30m10s    1 hour 30 minutes 10 seconds\n");
+    help.push('\n');
+    help.push_str("    Timestamp: HH:MM:SS[.mmm] or MM:SS[.mmm].\n");
+    help.push_str("        Examples:\n");
+    help.push_str("            00:01:30.500   1 minute 30.5 seconds\n");
+    help.push_str("            01:30          1 minute 30 seconds\n");
+    help.push_str("            1:02:03.250    1 hour 2 minutes 3.25 seconds\n\n");
 
     help.push_str("SETUP:\n\n");
 
@@ -332,6 +345,50 @@ mod tests {
         assert!(
             help.contains("1h30m10s"),
             "help text should include full compound duration example 1h30m10s"
+        );
+    }
+
+    #[test]
+    fn format_help_documents_timespec_ms_unit() {
+        let help = format_help();
+        assert!(
+            help.contains("ms"),
+            "help text should document the ms (millisecond) unit"
+        );
+        assert!(
+            help.contains("1500ms"),
+            "help text should include an ms example"
+        );
+    }
+
+    #[test]
+    fn format_help_documents_timespec_decimal() {
+        let help = format_help();
+        assert!(
+            help.contains("1.5s"),
+            "help text should include a decimal seconds example"
+        );
+    }
+
+    #[test]
+    fn format_help_documents_timestamp_notation() {
+        let help = format_help();
+        assert!(
+            help.contains("HH:MM:SS"),
+            "help text should document the HH:MM:SS timestamp notation"
+        );
+        assert!(
+            help.contains("00:01:30.500"),
+            "help text should include a timestamp example"
+        );
+    }
+
+    #[test]
+    fn format_help_notes_cut_needs_ffmpeg_not_blackhole() {
+        let help = format_help();
+        assert!(
+            help.contains("ffmpeg") && help.contains("not BlackHole"),
+            "help text should note that cut requires ffmpeg but not BlackHole"
         );
     }
 
