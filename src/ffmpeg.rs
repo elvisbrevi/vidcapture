@@ -145,6 +145,73 @@ pub fn build_capture_command(config: &CaptureConfig) -> Command {
     cmd
 }
 
+/// Configuration for an ffmpeg cut (extract a range from a source video).
+#[derive(Debug, Clone)]
+pub struct CutConfig {
+    pub source_path: String,
+    pub start: Duration,
+    pub length: Duration,
+    pub output_path: String,
+    pub fast: bool,
+    pub verbose: bool,
+}
+
+impl CutConfig {
+    pub fn new(source_path: String, start: Duration, length: Duration, output_path: String) -> Self {
+        Self {
+            source_path,
+            start,
+            length,
+            output_path,
+            fast: false,
+            verbose: false,
+        }
+    }
+
+    pub fn with_fast(mut self, fast: bool) -> Self {
+        self.fast = fast;
+        self
+    }
+
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+}
+
+/// Build an ffmpeg command that extracts a cut range from a source video.
+///
+/// Default (re-encode, frame-accurate):
+///   ffmpeg -y -ss <from> -i <source> -t <length> \
+///     -c:v libx264 -preset ultrafast -crf 23 \
+///     -c:a aac -b:a 128k <output>
+///
+/// `--fast` (stream copy, keyframe-aligned):
+///   ffmpeg -y -ss <from> -i <source> -t <length> \
+///     -c copy -avoid_negative_ts make_zero <output>
+///
+/// `-ss` goes before `-i` in both cases for fast seeking. Because the default
+/// re-encodes, the cut is still frame-accurate despite the fast seek.
+pub fn build_cut_command(config: &CutConfig) -> Command {
+    let mut cmd = Command::new("ffmpeg");
+
+    cmd.args(["-y"]);
+    cmd.args(["-ss", &format_seconds(config.start)]);
+    cmd.args(["-i", &config.source_path]);
+    cmd.args(["-t", &format_seconds(config.length)]);
+
+    if config.fast {
+        cmd.args(["-c", "copy", "-avoid_negative_ts", "make_zero"]);
+    } else {
+        cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"]);
+        cmd.args(["-c:a", "aac", "-b:a", "128k"]);
+    }
+
+    cmd.arg(&config.output_path);
+
+    cmd
+}
+
 /// A device exposed by macOS's AVFoundation layer (avfoundation input in ffmpeg).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvfoundationDevice {
@@ -929,6 +996,109 @@ ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
             "BlackHole should be present in the host's audio devices; \
              run `ffmpeg -f avfoundation -list_devices true -i \"\"` to verify"
         );
+    }
+
+    // ---- cut command builder (issue #18) ----
+
+    fn cut_config() -> CutConfig {
+        CutConfig::new(
+            "talk.mp4".to_string(),
+            Duration::from_secs(10),
+            Duration::from_secs(15),
+            "talk_cut.mp4".to_string(),
+        )
+    }
+
+    #[test]
+    fn cut_default_reencodes_with_h264_and_aac() {
+        let cmd = build_cut_command(&cut_config());
+        let args = get_args(&cmd);
+
+        // -ss before -i
+        let ss_pos = args.iter().position(|a| a == "-ss").expect("-ss missing");
+        let i_pos = args.iter().position(|a| a == "-i").expect("-i missing");
+        assert!(ss_pos < i_pos, "-ss must come before -i");
+
+        // -t present
+        assert!(args.contains(&"-t".to_string()));
+
+        // H.264 video codec
+        assert!(args.contains(&"-c:v".to_string()));
+        assert!(args.contains(&"libx264".to_string()));
+        assert!(args.contains(&"ultrafast".to_string()));
+        assert!(args.contains(&"23".to_string()));
+
+        // AAC audio codec
+        assert!(args.contains(&"-c:a".to_string()));
+        assert!(args.contains(&"aac".to_string()));
+        assert!(args.contains(&"128k".to_string()));
+
+        // No stream copy
+        assert!(!args.contains(&"copy".to_string()));
+    }
+
+    #[test]
+    fn cut_fast_uses_stream_copy() {
+        let config = cut_config().with_fast(true);
+        let cmd = build_cut_command(&config);
+        let args = get_args(&cmd);
+
+        assert!(args.contains(&"-c".to_string()));
+        assert!(args.contains(&"copy".to_string()));
+        assert!(args.contains(&"-avoid_negative_ts".to_string()));
+        assert!(args.contains(&"make_zero".to_string()));
+
+        // No codec args
+        assert!(!args.contains(&"-c:v".to_string()));
+        assert!(!args.contains(&"libx264".to_string()));
+        assert!(!args.contains(&"-c:a".to_string()));
+        assert!(!args.contains(&"aac".to_string()));
+    }
+
+    #[test]
+    fn cut_time_values_have_three_decimals() {
+        let cmd = build_cut_command(&cut_config());
+        let args = get_args(&cmd);
+
+        let ss_pos = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss_pos + 1], "10.000");
+
+        let t_pos = args.iter().position(|a| a == "-t").unwrap();
+        assert_eq!(args[t_pos + 1], "15.000");
+    }
+
+    #[test]
+    fn cut_subsecond_offset_survives() {
+        let config = CutConfig::new(
+            "talk.mp4".to_string(),
+            Duration::from_millis(1500),
+            Duration::from_secs(5),
+            "out.mp4".to_string(),
+        );
+        let cmd = build_cut_command(&config);
+        let args = get_args(&cmd);
+
+        let ss_pos = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss_pos + 1], "1.500");
+    }
+
+    #[test]
+    fn cut_overwrite_flag() {
+        let cmd = build_cut_command(&cut_config());
+        let args = get_args(&cmd);
+        assert_eq!(args[0], "-y");
+    }
+
+    #[test]
+    fn cut_source_and_output_in_command() {
+        let cmd = build_cut_command(&cut_config());
+        let args = get_args(&cmd);
+
+        let i_pos = args.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(args[i_pos + 1], "talk.mp4");
+
+        // Output is the last arg
+        assert_eq!(args.last().unwrap(), "talk_cut.mp4");
     }
 
     /// Live integration test for `detect_audio_setup` — only runs when both

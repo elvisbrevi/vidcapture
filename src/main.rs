@@ -12,7 +12,7 @@ use clap::Parser;
 
 use capture::{CaptureSession, RealFfmpegProcess};
 use cli::{Args, Command, CutArgs, StartArgs};
-use ffmpeg::CaptureConfig;
+use ffmpeg::{CaptureConfig, CutConfig};
 
 fn main() {
     let args = Args::parse();
@@ -120,7 +120,6 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
 }
 
 fn run_cut(args: CutArgs) -> anyhow::Result<()> {
-    // Validate source path exists and is a file
     if !args.source.exists() {
         anyhow::bail!("Source file not found: {}", args.source.display());
     }
@@ -128,14 +127,11 @@ fn run_cut(args: CutArgs) -> anyhow::Result<()> {
         anyhow::bail!("Source is not a file: {}", args.source.display());
     }
 
-    // Validate the cut range
     let range = args.validate_cut_range().map_err(|e| anyhow::anyhow!(e))?;
 
-    // Determine output path
     let output_path = match &args.output {
         Some(path) => path.clone(),
         None => {
-            // Default: <source>_cut.mp4 next to the source
             let stem = args
                 .source
                 .file_stem()
@@ -149,29 +145,18 @@ fn run_cut(args: CutArgs) -> anyhow::Result<()> {
         }
     };
 
-    // Build ffmpeg command for cutting
-    let start_secs = range.start.as_secs_f64();
-    let length_secs = range.length.as_secs_f64();
+    let config = CutConfig::new(
+        args.source.to_string_lossy().to_string(),
+        range.start,
+        range.length,
+        output_path.to_string_lossy().to_string(),
+    )
+    .with_fast(args.fast)
+    .with_verbose(args.verbose);
 
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-y"]);
-    cmd.args(["-ss", &format!("{:.3}", start_secs)]);
-    cmd.args(["-i", &args.source.to_string_lossy()]);
-    cmd.args(["-t", &format!("{:.3}", length_secs)]);
-
-    if args.fast {
-        // Stream-copy instead of re-encoding
-        cmd.args(["-c", "copy"]);
-    } else {
-        // Re-encode with H.264 + AAC
-        cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"]);
-        cmd.args(["-c:a", "aac", "-b:a", "128k"]);
-    }
-
-    cmd.arg(&output_path);
+    let mut cmd = ffmpeg::build_cut_command(&config);
 
     if args.verbose {
-        // Show ffmpeg output by inheriting stdout/stderr
         let status = cmd.status()?;
         if !status.success() {
             anyhow::bail!("ffmpeg exited with status: {}", status);
