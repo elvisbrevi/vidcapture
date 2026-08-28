@@ -181,7 +181,7 @@ pub fn format_help() -> String {
     help.push_str("    -o, --output <PATH>      Output file or directory.\n");
     help.push_str("        --fast               Stream-copy instead of re-encoding.\n");
     help.push_str("    -v, --verbose            Show ffmpeg output.\n");
-    help.push_str("                             Requires ffmpeg but not BlackHole.\n\n");
+    help.push_str("    cut requires ffmpeg but not BlackHole, and never touches the source video.\n\n");
 
     help.push_str("DURATION FORMAT:\n");
     help.push_str("    A timespec is one of two notations:\n");
@@ -399,6 +399,22 @@ mod tests {
         assert!(
             help.contains("ffmpeg") && help.contains("not BlackHole"),
             "help text should note that cut requires ffmpeg but not BlackHole"
+        );
+    }
+
+    /// The note is about the `cut` command, not about `--verbose`. Hanging it
+    /// off the `-v` entry reads as a property of that flag.
+    #[test]
+    fn format_help_attributes_the_blackhole_note_to_cut_not_to_verbose() {
+        let help = format_help();
+        let note_line = help
+            .lines()
+            .find(|line| line.contains("not BlackHole"))
+            .expect("help should carry the BlackHole note");
+        assert!(
+            note_line.contains("cut"),
+            "the note must name the cut command, got: {}",
+            note_line.trim()
         );
     }
 

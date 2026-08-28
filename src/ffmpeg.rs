@@ -1,5 +1,6 @@
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use crate::output;
@@ -203,6 +204,49 @@ pub fn build_cut_command(config: &CutConfig) -> Command {
     cmd.arg(&config.output_path);
 
     cmd
+}
+
+/// Run a one-shot ffmpeg command to completion, returning its exit status and
+/// everything it wrote to stderr.
+///
+/// stderr is always captured — callers scrape progress out of it — and, when
+/// `echo_stderr`, forwarded to our own stderr as it arrives so a long run still
+/// shows ffmpeg's progress live. The child gets no stdin: ffmpeg treats stdin
+/// as a keyboard, and a stray `q` would stop it early.
+pub fn run_to_completion(
+    mut cmd: Command,
+    echo_stderr: bool,
+) -> std::io::Result<(ExitStatus, String)> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut child_stderr = child.stderr.take().expect("stderr was piped");
+
+    let mut captured: Vec<u8> = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        let read = match child_stderr.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                // Leave no orphan still writing to the output file: the caller
+                // deletes that file on error.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
+        if echo_stderr {
+            let _ = std::io::stderr().write_all(&buffer[..read]);
+        }
+        captured.extend_from_slice(&buffer[..read]);
+    }
+
+    let status = child.wait()?;
+    Ok((status, String::from_utf8_lossy(&captured).into_owned()))
 }
 
 /// A device exposed by macOS's AVFoundation layer (avfoundation input in ffmpeg).
@@ -989,6 +1033,45 @@ ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
             "BlackHole should be present in the host's audio devices; \
              run `ffmpeg -f avfoundation -list_devices true -i \"\"` to verify"
         );
+    }
+
+    // ---- run_to_completion ----
+
+    /// A one-shot run returns the child's exit status and everything it wrote
+    /// to stderr.
+    #[test]
+    fn run_to_completion_returns_status_and_stderr() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo boom >&2; exit 3"]);
+
+        let (status, stderr) = run_to_completion(cmd, false).unwrap();
+
+        assert_eq!(status.code(), Some(3));
+        assert_eq!(stderr, "boom\n");
+    }
+
+    /// The child gets no stdin: ffmpeg reads key presses from it (`q` quits),
+    /// so a piped or redirected stdin would cut a recording short.
+    #[test]
+    fn run_to_completion_gives_the_child_no_stdin() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "read line; echo \"read:$line\" >&2"]);
+
+        let (_, stderr) = run_to_completion(cmd, false).unwrap();
+
+        assert_eq!(stderr, "read:\n", "child should see stdin at EOF");
+    }
+
+    /// stderr larger than one read buffer must survive intact.
+    #[test]
+    fn run_to_completion_captures_output_larger_than_the_read_buffer() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "yes ffmpeg | head -c 20000 >&2"]);
+
+        let (status, stderr) = run_to_completion(cmd, false).unwrap();
+
+        assert!(status.success());
+        assert_eq!(stderr.len(), 20_000);
     }
 
     // ---- cut command builder (issue #18) ----

@@ -392,3 +392,31 @@ fn cut_failure_reports_the_ffmpeg_error_once_in_both_modes() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `cut` shells out to ffmpeg; when it is not on PATH, say so instead of
+/// leaking a bare OS error.
+#[test]
+fn cut_without_ffmpeg_on_path_explains_the_missing_dependency() {
+    let dir = std::env::temp_dir().join("vidcapture_cut_e2e_no_ffmpeg");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 5);
+
+    let result = Command::new(env!("CARGO_BIN_EXE_vidcapture"))
+        .args(["cut", source.to_str().unwrap(), "--length", "1s"])
+        .env("PATH", dir.to_str().unwrap())
+        .output()
+        .expect("vidcapture should run");
+
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("ffmpeg not found"),
+        "should name the missing dependency, got: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
