@@ -144,9 +144,8 @@ pub fn resolve_cut_output_path(source: &Path, output: Option<&Path>) -> anyhow::
             dir.join(format!("{}_cut.mp4", source_stem))
         }
         Some(path) => {
-            let is_dir = (path.exists() && path.is_dir())
-                || path.to_string_lossy().ends_with('/')
-                || path.to_string_lossy().ends_with('\\');
+            let is_dir =
+                (path.exists() && path.is_dir()) || path.to_string_lossy().ends_with('/');
             if is_dir {
                 let dir = resolve_output_directory(path)?;
                 dir.join(format!("{}_cut.mp4", source_stem))
@@ -349,10 +348,22 @@ mod tests {
 
     // ---- prepare_output_path (issue #5 acceptance criteria) ----
 
+    /// The process-wide current directory is shared by every test thread, so
+    /// the tests that read or change it must not run concurrently.
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take [`CWD_LOCK`], ignoring poisoning: a test that panicked while
+    /// holding it still restored the cwd on its way out, so the lock guards
+    /// nothing but ordering.
+    fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
+        CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// The default-directory path (no `-o`) must place the file in the current
     /// working directory and never create extra directories.
     #[test]
     fn prepare_output_path_uses_cwd_by_default() {
+        let _guard = lock_cwd();
         let ts = fixed_timestamp();
         let path = prepare_output_path(None, &ts).unwrap();
 
@@ -493,6 +504,7 @@ mod tests {
     /// the relative name is interpreted by the OS rather than by us.
     #[test]
     fn prepare_output_path_resolves_relative_paths_against_cwd() {
+        let _guard = lock_cwd();
         let dir = std::env::temp_dir().join("vidcapture_test_relative_cwd");
         let _ = std::fs::remove_dir_all(&dir);
 

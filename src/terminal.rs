@@ -130,6 +130,16 @@ pub fn print_saved(path: &std::path::Path) {
     eprintln!("Saved to {}", path.display());
 }
 
+/// Print the saved cut path to stderr.
+pub fn print_cut_saved(path: &std::path::Path) {
+    eprintln!("Cut saved to {}", path.display());
+}
+
+/// Print a colored warning message to stderr.
+pub fn print_warning(msg: &str) {
+    eprintln!("\x1b[33mwarning\x1b[0m: {}", msg);
+}
+
 /// Print a colored error message to stderr.
 pub fn print_error(msg: &str) {
     eprintln!("\x1b[31merror\x1b[0m: {}", msg);

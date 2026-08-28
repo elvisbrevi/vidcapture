@@ -219,3 +219,176 @@ fn cut_help_documents_flags() {
     assert!(stdout.contains("--fast"));
     assert!(stdout.contains("--output"));
 }
+
+#[test]
+fn cut_success_reports_the_saved_cut_path() {
+    let dir = std::env::temp_dir().join("vidcapture_cut_e2e_saved_msg");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 5);
+
+    let output = dir.join("clip.mp4");
+    let result = vidcapture(&[
+        "cut",
+        source.to_str().unwrap(),
+        "--length",
+        "1s",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "cut should succeed, stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains(&format!("Cut saved to {}", output.display())),
+        "success message should name the cut, got: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The short-range warning is about the cut, not about the log level: `-v`
+/// must not swallow it.
+#[test]
+fn cut_range_past_end_warns_in_verbose_mode_too() {
+    let dir = std::env::temp_dir().join("vidcapture_cut_e2e_past_end_verbose");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 5);
+
+    let output = dir.join("cut_out.mp4");
+    let result = vidcapture(&[
+        "cut",
+        source.to_str().unwrap(),
+        "--from",
+        "3s",
+        "--to",
+        "20s",
+        "-o",
+        output.to_str().unwrap(),
+        "-v",
+    ]);
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "cut past end should still succeed, stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("warning"),
+        "-v should not swallow the short-range warning, stderr: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `-v` shows ffmpeg's own output; without it the run stays quiet apart from
+/// vidcapture's own messages.
+#[test]
+fn cut_verbose_shows_ffmpeg_output_and_quiet_run_does_not() {
+    let dir = std::env::temp_dir().join("vidcapture_cut_e2e_verbosity");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 5);
+
+    let verbose = vidcapture(&[
+        "cut",
+        source.to_str().unwrap(),
+        "--length",
+        "1s",
+        "-o",
+        dir.join("verbose.mp4").to_str().unwrap(),
+        "-v",
+    ]);
+    let verbose_stderr = String::from_utf8_lossy(&verbose.stderr);
+    assert!(
+        verbose_stderr.contains("ffmpeg version"),
+        "-v should show ffmpeg output, got: {}",
+        verbose_stderr
+    );
+
+    let quiet = vidcapture(&[
+        "cut",
+        source.to_str().unwrap(),
+        "--length",
+        "1s",
+        "-o",
+        dir.join("quiet.mp4").to_str().unwrap(),
+    ]);
+    let quiet_stderr = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        !quiet_stderr.contains("ffmpeg version"),
+        "a quiet run should not show ffmpeg output, got: {}",
+        quiet_stderr
+    );
+    assert_eq!(
+        quiet_stderr.lines().count(),
+        1,
+        "a quiet run should print only the saved-cut line, got: {}",
+        quiet_stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An ffmpeg failure exits 1, leaves no partial file, and reports the error
+/// once — `-v` already streamed ffmpeg's output, so the error message must not
+/// repeat it.
+#[test]
+fn cut_failure_reports_the_ffmpeg_error_once_in_both_modes() {
+    let dir = std::env::temp_dir().join("vidcapture_cut_e2e_failure");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // A file ffmpeg cannot decode: passes vidcapture's own source checks and
+    // fails inside ffmpeg.
+    let source = dir.join("broken.mp4");
+    std::fs::write(&source, b"this is not a video").unwrap();
+
+    let count_errors = |out: &Output| {
+        String::from_utf8_lossy(&out.stderr)
+            .matches("Invalid data found")
+            .count()
+    };
+
+    let output = dir.join("cut_out.mp4");
+    let quiet = vidcapture(&[
+        "cut", source.to_str().unwrap(),
+        "--length", "1s",
+        "-o", output.to_str().unwrap(),
+    ]);
+    assert!(!quiet.status.success(), "a broken source should fail");
+    assert!(
+        !output.exists(),
+        "a failed cut should leave no partial file behind"
+    );
+
+    let verbose = vidcapture(&[
+        "cut", source.to_str().unwrap(),
+        "--length", "1s",
+        "-o", output.to_str().unwrap(),
+        "-v",
+    ]);
+    assert!(!verbose.status.success(), "a broken source should fail under -v too");
+    assert_eq!(
+        count_errors(&verbose),
+        count_errors(&quiet),
+        "-v should not report ffmpeg's error twice, stderr: {}",
+        String::from_utf8_lossy(&verbose.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

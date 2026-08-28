@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -148,33 +148,26 @@ pub fn build_capture_command(config: &CaptureConfig) -> Command {
 /// Configuration for an ffmpeg cut (extract a range from a source video).
 #[derive(Debug, Clone)]
 pub struct CutConfig {
-    pub source_path: String,
+    pub source_path: PathBuf,
     pub start: Duration,
     pub length: Duration,
-    pub output_path: String,
+    pub output_path: PathBuf,
     pub fast: bool,
-    pub verbose: bool,
 }
 
 impl CutConfig {
-    pub fn new(source_path: String, start: Duration, length: Duration, output_path: String) -> Self {
+    pub fn new(source_path: &Path, start: Duration, length: Duration, output_path: &Path) -> Self {
         Self {
-            source_path,
+            source_path: source_path.to_path_buf(),
             start,
             length,
-            output_path,
+            output_path: output_path.to_path_buf(),
             fast: false,
-            verbose: false,
         }
     }
 
     pub fn with_fast(mut self, fast: bool) -> Self {
         self.fast = fast;
-        self
-    }
-
-    pub fn with_verbose(mut self, verbose: bool) -> Self {
-        self.verbose = verbose;
         self
     }
 }
@@ -197,7 +190,7 @@ pub fn build_cut_command(config: &CutConfig) -> Command {
 
     cmd.args(["-y"]);
     cmd.args(["-ss", &format_seconds(config.start)]);
-    cmd.args(["-i", &config.source_path]);
+    cmd.arg("-i").arg(&config.source_path);
     cmd.args(["-t", &format_seconds(config.length)]);
 
     if config.fast {
@@ -1002,10 +995,10 @@ ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
 
     fn cut_config() -> CutConfig {
         CutConfig::new(
-            "talk.mp4".to_string(),
+            Path::new("talk.mp4"),
             Duration::from_secs(10),
             Duration::from_secs(15),
-            "talk_cut.mp4".to_string(),
+            Path::new("talk_cut.mp4"),
         )
     }
 
@@ -1070,10 +1063,10 @@ ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
     #[test]
     fn cut_subsecond_offset_survives() {
         let config = CutConfig::new(
-            "talk.mp4".to_string(),
+            Path::new("talk.mp4"),
             Duration::from_millis(1500),
             Duration::from_secs(5),
-            "out.mp4".to_string(),
+            Path::new("out.mp4"),
         );
         let cmd = build_cut_command(&config);
         let args = get_args(&cmd);
