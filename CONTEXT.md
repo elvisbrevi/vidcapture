@@ -57,7 +57,7 @@ The `key=value` string given to one `-l/--label` flag, describing one label: its
 _Avoid_: descriptor, definition, config
 
 **Label background**:
-The colored band drawn behind a label's text so the text stays readable over the footage. Optional — a label with no `background=` is drawn bare.
+The colored band drawn behind a label's text so the text stays readable over the footage. Drawn by default; `background=none` is how a label spec asks for text with no band behind it.
 _Avoid_: box, banner, highlight, fill
 
 **Timespec**:

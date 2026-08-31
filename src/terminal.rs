@@ -204,6 +204,8 @@ pub fn format_help() -> String {
     help.push_str("LABEL SPEC:\n");
     help.push_str("    A comma-separated list of key=value pairs describing one label:\n");
     help.push_str("    the text, the label window it is visible for, and how it is drawn.\n");
+    help.push_str("    Only text and one end of the window are required — a label with no\n");
+    help.push_str("    styling is drawn in white at 32px on a translucent black band.\n");
     help.push('\n');
     help.push_str("    text=<TEXT>              The text drawn on the video. Required.\n");
     help.push_str("    from=<TIME>              Start of the label window (default: 0s).\n");
@@ -213,7 +215,7 @@ pub fn format_help() -> String {
     help.push_str("    color=<COLOR>            Text color (default: white).\n");
     help.push_str("    size=<PIXELS>            Font size in pixels (default: 32).\n");
     help.push_str("    background=<COLOR>       Color of the band drawn behind the text.\n");
-    help.push_str("                             Default: none — the text is drawn bare.\n");
+    help.push_str("                             Default: black@0.5. Use background=none for no band.\n");
     help.push('\n');
     help.push_str("    Colors are ffmpeg color names or #RRGGBB, with an optional alpha\n");
     help.push_str("    suffix: white, yellow, #ffcc00, black@0.5.\n");
@@ -274,10 +276,13 @@ pub fn format_help() -> String {
     help.push_str("    # A label across the bottom from 1m32s to 2m:\n");
     help.push_str("    vidcapture label talk.mp4 -l \"text=Setting up,from=1m32s,to=2m\"\n");
     help.push('\n');
-    help.push_str("    # Two labels, one on top with a band behind it:\n");
+    help.push_str("    # Two labels, one moved to the top and one restyled:\n");
     help.push_str("    vidcapture label talk.mp4 \\\n");
-    help.push_str("        -l \"text=Intro,from=0s,to=1m,position=top,background=black@0.5\" \\\n");
+    help.push_str("        -l \"text=Intro,from=0s,to=1m,position=top\" \\\n");
     help.push_str("        -l \"text=Live demo,from=1m,length=90s,color=#ffcc00,size=48\"\n");
+    help.push('\n');
+    help.push_str("    # A label with no band behind it:\n");
+    help.push_str("    vidcapture label talk.mp4 -l \"text=Plain,to=10s,background=none\"\n");
 
     help
 }

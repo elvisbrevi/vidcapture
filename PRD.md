@@ -46,7 +46,7 @@ A third command, `vidcapture label`, draws timed text labels onto an existing so
 30. As a user, I want to repeat `-l` so that I can add as many labels to one video as the walkthrough needs, in a single pass.
 31. As a user, I want to choose whether each label sits at the top or the bottom of the frame, so that a label never covers what it is describing.
 32. As a user, I want to set each label's text color and font size, so that it stays readable over whatever the footage is.
-33. As a user, I want an optional colored band behind a label's text, so that the text stays legible over busy or light-colored footage.
+33. As a user, I want a colored band behind a label's text by default, so that a label I did not style is still legible over busy or light-colored footage — and `background=none` when I want the text bare.
 34. As a user, I want a label's window expressed in the same timespec as everything else (`1m32s`, `00:01:32`, `--length`-style `length=`), so that I don't learn a second time format.
 35. As a user, I want a clear error when a label spec is malformed (missing text, no end, unknown key, bad color), before ffmpeg is run, so that I don't wait through a re-encode to find a typo.
 36. As a user, I want a warning when a label window starts past the end of the source video, so that I know why the label I asked for never shows up.
@@ -141,11 +141,13 @@ A label spec is a comma-separated list of `key=value` pairs, parsed by clap's `v
 | `position` | `top` or `bottom`. | `bottom` |
 | `color` | Text color. | `white` |
 | `size` | Font size in pixels. | `32` |
-| `background` | Color of the label background band. | none |
+| `background` | Color of the label background band, or `none` for no band. | `black@0.5` |
 
 Time-valued keys take the same timespec as every other time-valued flag. The label window is validated by exactly the three rules a cut range is — one of the two ends is required, the start must precede the end, a length must be positive — so both go through one shared helper, which is told how the user spelled the options (`--from` vs `from=`) so each error names what they typed.
 
 Colors are ffmpeg's own syntax: a name (`white`), a hex triplet (`#ffcc00`), either optionally carrying an `@<alpha>` suffix (`black@0.5`). They are charset-validated rather than fully parsed — enough to catch a typo, and enough that a spec cannot smuggle `:` or `'` into the filtergraph, where they would be read as filter syntax rather than a color.
+
+Only `text` and one end of the label window are required. Every styling key defaults to the combination that stays readable over footage the user has not seen yet — white text at 32px on a translucent black band — rather than to the barest thing that renders, since a label the viewer cannot read has not done its job. `background=none` is how a spec asks for text with no band at all; it is a keyword rather than a color because "no band" is not something ffmpeg's color syntax can say.
 
 Duplicate and unknown keys are errors: a silently ignored `postion=top` would produce a video that looks right in the terminal and wrong on screen.
 
@@ -155,7 +157,7 @@ One `drawtext` filter per label, chained with commas into a single `-vf`, each g
 
 - Horizontal placement is always centred (`x=(w-text_w)/2`).
 - Vertical placement is a margin of 5% of the frame height in from the chosen edge, so a label sits the same distance in whatever the source resolution is.
-- `background` is drawn as `box=1` with `boxborderw` set to a third of the font size, which turns a tight outline into a band with the text inside it. That padding is added to the margin so the band never overhangs the frame edge. Without a `background` there is no band and no padding.
+- `background` is drawn as `box=1` with `boxborderw` set to a third of the font size, which turns a tight outline into a band with the text inside it. That padding is added to the margin so the band never overhangs the frame edge. With `background=none` there is no band and no padding, and the text sits right on the margin.
 - `--font` sets `fontfile`; with no `--font`, ffmpeg resolves the system font through fontconfig.
 
 A label's text reaches ffmpeg as a filter option value, so it is escaped before it goes into the filtergraph, and `expansion=none` keeps `drawtext` from reading a `%{...}` in it as an ffmpeg expression. See `docs/adr/0003-draw-labels-with-drawtext.md`.
@@ -166,7 +168,7 @@ Hard errors (colored message, exit code `1`, no file written):
 
 - The source path does not exist, or is not a file.
 - No `-l/--label` was given.
-- A label spec is malformed: missing or empty `text=`, neither `to=` nor `length=`, both of them, `from=` at or after `to=`, a zero or non-numeric `size=`, an unknown key, a duplicate key, an invalid `position=`, or a `color=`/`background=` that is not color syntax.
+- A label spec is malformed: missing or empty `text=`, neither `to=` nor `length=`, both of them, `from=` at or after `to=`, a zero or non-numeric `size=`, an unknown key, a duplicate key, an invalid `position=`, or a `color=`/`background=` that is neither color syntax nor (for `background=`) `none`.
 
 Soft case: a label window that starts at or after the end of the source video is **not** an error — the rest of the labels are still drawn. `label` reads back the same `time=` token from ffmpeg's stderr that `cut` uses, and warns per unreachable label, naming it so the user knows which one to fix. A label window that merely *runs past* the end is not reported: the label is on screen for the footage that exists, which is what was asked for.
 

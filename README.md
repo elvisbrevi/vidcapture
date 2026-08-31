@@ -37,8 +37,10 @@ No GUI, no project files, no export dialog — one binary that shells out to
   for a near-instant, keyframe-aligned cut.
 - **`label`** — draws timed text onto any existing video: each label appears
   for the span you give it and disappears again. Repeat `-l` for as many
-  labels as you need, each with its own position (top or bottom), text color,
-  font size, and optional background band. The source is never modified.
+  labels as you need. A label needs only its text and its window — it comes
+  out white on a translucent band, readable over whatever is behind it — and
+  takes a position (top or bottom), color, size, and band color when the
+  default doesn't fit. The source is never modified.
 - **One timespec format everywhere** — `10s`, `1500ms`, `1h30m10s`, or
   `00:01:30.500`, accepted by every time-valued flag and label spec key.
 - **No lingering partial files** — a failed capture or cut cleans up after
@@ -88,11 +90,11 @@ vidcapture cut talk.mp4 --from 1m --length 1500ms --fast   # instant, no re-enco
 # One label across the bottom, from 1m32s to 2m:
 vidcapture label talk.mp4 -l "text=Setting up,from=1m32s,to=2m"
 
-# Several labels in one pass, each styled on its own:
+# Several labels in one pass, restyled where the default doesn't fit:
 vidcapture label talk.mp4 \
-    -l "text=Intro,from=0s,to=1m32s,position=top,background=black@0.5" \
+    -l "text=Intro,from=0s,to=1m32s,position=top" \
     -l "text=Setting up,from=1m32s,to=2m" \
-    -l "text=Live demo,from=2m,length=90s,color=#ffcc00,size=48,background=black@0.6"
+    -l "text=Live demo,from=2m,length=90s,color=#ffcc00,size=48,background=black@0.7"
 ```
 
 ### Label specs
@@ -108,7 +110,12 @@ Each `-l` takes one label as comma-separated `key=value` pairs:
 | `position` | `top` or `bottom`. | `bottom` |
 | `color` | Text color. | `white` |
 | `size` | Font size in pixels. | `32` |
-| `background` | Color of the band behind the text. | none |
+| `background` | Color of the band behind the text, or `none`. | `black@0.5` |
+
+Only `text` and one end of the window are required. Everything else has a
+default chosen to be readable over footage you haven't seen: white text at
+32px on a translucent black band. Set `background=none` if you'd rather the
+text sat directly on the video.
 
 Times take any timespec (`92s`, `1m32s`, `00:01:32`). Colors are ffmpeg
 names or `#RRGGBB`, with an optional alpha suffix: `white`, `#ffcc00`,

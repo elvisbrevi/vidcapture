@@ -198,6 +198,17 @@ const DEFAULT_LABEL_COLOR: &str = "white";
 /// Font size, in pixels, used when a label spec does not set `size=`.
 const DEFAULT_LABEL_SIZE: u32 = 32;
 
+/// Label background used when a label spec does not set `background=`.
+///
+/// A label is captioning footage nobody has seen yet, so the readable thing —
+/// light text on a dark band — is what a spec that says nothing about styling
+/// gets. `background=none` draws the text bare instead.
+const DEFAULT_LABEL_BACKGROUND: &str = "black@0.5";
+
+/// The `background=` value that turns the band off, rather than naming a color
+/// for it.
+const NO_LABEL_BACKGROUND: &str = "none";
+
 /// One validated label: its text, the label window it is visible for, and how
 /// it is drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,7 +225,8 @@ pub struct Label {
     /// Font size in pixels.
     pub size: u32,
     /// Label background drawn behind the text, in ffmpeg's color syntax.
-    /// `None` draws the text with no background.
+    /// `None` draws the text bare, which a spec asks for with
+    /// `background=none`.
     pub background: Option<String>,
 }
 
@@ -239,7 +251,8 @@ impl Label {
 /// - `position` — `top` or `bottom` (default `bottom`).
 /// - `color` — text color (default `white`).
 /// - `size` — font size in pixels (default `32`).
-/// - `background` — color of the band drawn behind the text (default: none).
+/// - `background` — color of the band drawn behind the text
+///   (default `black@0.5`; `none` draws the text bare).
 ///
 /// Every time-valued key takes the same timespec the rest of the CLI does.
 pub fn parse_label_spec(input: &str) -> Result<Label, String> {
@@ -250,7 +263,7 @@ pub fn parse_label_spec(input: &str) -> Result<Label, String> {
     let mut position = LabelPosition::default();
     let mut color = DEFAULT_LABEL_COLOR.to_string();
     let mut size = DEFAULT_LABEL_SIZE;
-    let mut background: Option<String> = None;
+    let mut background = Some(DEFAULT_LABEL_BACKGROUND.to_string());
     let mut seen: Vec<String> = Vec::new();
 
     for pair in split_label_pairs(input) {
@@ -280,7 +293,7 @@ pub fn parse_label_spec(input: &str) -> Result<Label, String> {
             "length" => length = Some(parse_positive_timespec(value)?),
             "position" => position = parse_label_position(value)?,
             "color" => color = parse_ffmpeg_color(value, "color")?,
-            "background" => background = Some(parse_ffmpeg_color(value, "background")?),
+            "background" => background = parse_label_background(value)?,
             "size" => {
                 size = value.parse::<u32>().map_err(|_| {
                     format!("Invalid size= value: '{}'. Expected pixels, e.g. 32.", value)
@@ -335,6 +348,15 @@ fn split_label_pairs(input: &str) -> Vec<String> {
     }
 
     pairs
+}
+
+/// Parse a `background=` value: a color for the band, or `none` to draw the
+/// label's text with no band behind it at all.
+fn parse_label_background(value: &str) -> Result<Option<String>, String> {
+    if value.eq_ignore_ascii_case(NO_LABEL_BACKGROUND) {
+        return Ok(None);
+    }
+    Ok(Some(parse_ffmpeg_color(value, "background")?))
 }
 
 fn parse_label_position(value: &str) -> Result<LabelPosition, String> {
@@ -937,7 +959,25 @@ mod tests {
         assert_eq!(label.position, LabelPosition::Bottom);
         assert_eq!(label.color, "white");
         assert_eq!(label.size, 32);
-        assert_eq!(label.background, None);
+        assert_eq!(label.background.as_deref(), Some("black@0.5"));
+    }
+
+    /// Styling is optional, but a bare label spec is still readable: it gets
+    /// white text at 32px on a dark band, not raw text on the footage.
+    #[test]
+    fn parse_label_spec_defaults_to_readable_styling() {
+        let label = label_from("text=Hello,to=5s");
+        assert_eq!(label.color, DEFAULT_LABEL_COLOR);
+        assert_eq!(label.size, DEFAULT_LABEL_SIZE);
+        assert_eq!(label.background.as_deref(), Some(DEFAULT_LABEL_BACKGROUND));
+    }
+
+    #[test]
+    fn parse_label_spec_background_none_draws_the_text_bare() {
+        for value in ["none", "NONE", "None"] {
+            let label = label_from(&format!("text=Hello,to=5s,background={}", value));
+            assert_eq!(label.background, None, "background={}", value);
+        }
     }
 
     #[test]
