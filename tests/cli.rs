@@ -420,3 +420,219 @@ fn cut_without_ffmpeg_on_path_explains_the_missing_dependency() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Two labels on one pass: both are drawn, the source is left byte-for-byte
+/// alone, and the labeled video lands where the success message says it did.
+#[test]
+fn label_end_to_end_with_two_labels() {
+    let dir = std::env::temp_dir().join("vidcapture_label_e2e_two");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 10);
+    let source_before = std::fs::read(&source).unwrap();
+
+    let output = dir.join("labeled.mp4");
+    let result = vidcapture(&[
+        "label",
+        source.to_str().unwrap(),
+        "-l", "text=Intro,from=1s,to=4s,position=top,background=black@0.5",
+        "-l", "text=Demo,from=4s,length=3s,color=#ffcc00,size=48",
+        "-o", output.to_str().unwrap(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "label should succeed, stderr: {}", stderr);
+    assert!(output.exists(), "labeled video should exist");
+    assert!(std::fs::metadata(&output).unwrap().len() > 0);
+    assert!(
+        stderr.contains(&format!("Labeled video saved to {}", output.display())),
+        "success message should name the labeled video, got: {}",
+        stderr
+    );
+    assert_eq!(
+        std::fs::read(&source).unwrap(),
+        source_before,
+        "a label pass must leave the source video untouched"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With no -o the labeled video lands beside the source as
+/// `<source-stem>_labeled.mp4`.
+#[test]
+fn label_without_output_writes_beside_the_source() {
+    let dir = std::env::temp_dir().join("vidcapture_label_e2e_default_path");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("talk.mp4");
+    create_test_video(&source, 5);
+
+    let result = vidcapture(&[
+        "label",
+        source.to_str().unwrap(),
+        "-l", "text=Hello,to=2s",
+    ]);
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "label should succeed, stderr: {}", stderr);
+    assert!(
+        dir.join("talk_labeled.mp4").exists(),
+        "should write talk_labeled.mp4 beside the source, stderr: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A label window past the end of the source draws nothing, so say so instead
+/// of handing back a video that silently looks unlabeled.
+#[test]
+fn label_window_past_end_of_source_warns_and_succeeds() {
+    let dir = std::env::temp_dir().join("vidcapture_label_e2e_past_end");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 3);
+
+    let output = dir.join("labeled.mp4");
+    let result = vidcapture(&[
+        "label",
+        source.to_str().unwrap(),
+        "-l", "text=Never seen,from=30s,to=40s",
+        "-o", output.to_str().unwrap(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "a label past the end should still succeed, stderr: {}",
+        stderr
+    );
+    assert!(output.exists(), "labeled video should still be written");
+    assert!(
+        stderr.contains("warning") && stderr.contains("never appears"),
+        "should warn that the label never appears, stderr: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A label whose window fits inside the source is not warned about.
+#[test]
+fn label_within_the_source_does_not_warn() {
+    let dir = std::env::temp_dir().join("vidcapture_label_e2e_inside");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 5);
+
+    let output = dir.join("labeled.mp4");
+    let result = vidcapture(&[
+        "label",
+        source.to_str().unwrap(),
+        "-l", "text=Hello,from=1s,to=3s",
+        "-o", output.to_str().unwrap(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "label should succeed, stderr: {}", stderr);
+    assert!(
+        !stderr.contains("warning"),
+        "a label inside the source should not warn, stderr: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn label_nonexistent_source_errors() {
+    let result = vidcapture(&[
+        "label",
+        "/nonexistent/video.mp4",
+        "-l", "text=Hello,to=5s",
+    ]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("Source file not found"),
+        "should report missing source, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn label_without_a_label_spec_errors() {
+    let dir = std::env::temp_dir().join("vidcapture_label_e2e_no_spec");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 3);
+
+    let result = vidcapture(&["label", source.to_str().unwrap()]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("--label"),
+        "should name the required flag, stderr: {}",
+        stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An invalid spec is rejected before ffmpeg runs, so no file is written.
+#[test]
+fn label_invalid_spec_errors_without_writing_anything() {
+    let dir = std::env::temp_dir().join("vidcapture_label_e2e_bad_spec");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let source = dir.join("source.mp4");
+    create_test_video(&source, 3);
+
+    let output = dir.join("labeled.mp4");
+    let result = vidcapture(&[
+        "label",
+        source.to_str().unwrap(),
+        "-l", "text=Hello,from=10s,to=5s",
+        "-o", output.to_str().unwrap(),
+    ]);
+
+    assert!(!result.status.success());
+    assert!(!output.exists(), "an invalid spec should write no file");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn label_help_documents_flags() {
+    let output = vidcapture(&["label", "--help"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.contains("--label"));
+    assert!(stdout.contains("--font"));
+    assert!(stdout.contains("--output"));
+    assert!(stdout.contains("--verbose"));
+}
+
+#[test]
+fn help_subcommand_describes_the_label_command_and_spec() {
+    let output = vidcapture(&["help"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.contains("-l, --label"));
+    assert!(stdout.contains("LABEL SPEC"));
+    assert!(stdout.contains("position=top|bottom"));
+    assert!(stdout.contains("background=<COLOR>"));
+}

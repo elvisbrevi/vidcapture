@@ -124,15 +124,37 @@ pub fn resolve_output_directory(path: &Path) -> anyhow::Result<PathBuf> {
 
 /// Resolve the output path for a cut operation.
 ///
+/// With no `-o`, the cut lands beside the source as `<source-stem>_cut.mp4`.
+/// See [`resolve_derived_output_path`] for the full rules.
+pub fn resolve_cut_output_path(source: &Path, output: Option<&Path>) -> anyhow::Result<PathBuf> {
+    resolve_derived_output_path(source, output, "cut")
+}
+
+/// Resolve the output path for a label pass.
+///
+/// With no `-o`, the labeled video lands beside the source as
+/// `<source-stem>_labeled.mp4`. See [`resolve_derived_output_path`] for the
+/// full rules.
+pub fn resolve_label_output_path(source: &Path, output: Option<&Path>) -> anyhow::Result<PathBuf> {
+    resolve_derived_output_path(source, output, "labeled")
+}
+
+/// Resolve the output path for a command that derives a new video from a
+/// source video, naming it `<source-stem>_<suffix>.mp4` by default.
+///
 /// Rules:
-/// - No output: `<source-stem>_cut.mp4` beside the source.
+/// - No output: `<source-stem>_<suffix>.mp4` beside the source.
 /// - Output is a directory (exists+is_dir or ends with separator): put
-///   `<source-stem>_cut.mp4` inside it, creating the dir if missing.
+///   `<source-stem>_<suffix>.mp4` inside it, creating the dir if missing.
 /// - Output is a file path: use it directly; parent must exist.
 /// - Always `.mp4` regardless of source container.
 /// - Refuse to overwrite the source video.
 /// - Apply `avoid_collision` to prevent overwriting existing files.
-pub fn resolve_cut_output_path(source: &Path, output: Option<&Path>) -> anyhow::Result<PathBuf> {
+fn resolve_derived_output_path(
+    source: &Path,
+    output: Option<&Path>,
+    suffix: &str,
+) -> anyhow::Result<PathBuf> {
     let source_stem = source
         .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine source file name: {}", source.display()))?
@@ -141,14 +163,14 @@ pub fn resolve_cut_output_path(source: &Path, output: Option<&Path>) -> anyhow::
     let resolved = match output {
         None => {
             let dir = source.parent().unwrap_or(Path::new("."));
-            dir.join(format!("{}_cut.mp4", source_stem))
+            dir.join(format!("{}_{}.mp4", source_stem, suffix))
         }
         Some(path) => {
             let is_dir =
                 (path.exists() && path.is_dir()) || path.to_string_lossy().ends_with('/');
             if is_dir {
                 let dir = resolve_output_directory(path)?;
-                dir.join(format!("{}_cut.mp4", source_stem))
+                dir.join(format!("{}_{}.mp4", source_stem, suffix))
             } else {
                 let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
                 if let Some(parent) = parent
@@ -180,6 +202,13 @@ pub fn resolve_cut_output_path(source: &Path, output: Option<&Path>) -> anyhow::
     }
 
     Ok(avoid_collision(&resolved))
+}
+
+/// Delete a partially written output so a failed run leaves no corrupt file.
+pub fn remove_partial_output(path: &Path) {
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Find a non-colliding filename by appending _1, _2, etc. if the file exists.
@@ -570,6 +599,97 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&blocker);
+    }
+
+
+    // ---- resolve_label_output_path ----
+
+    #[test]
+    fn label_no_output_resolves_to_source_stem_labeled_mp4() {
+        let source = PathBuf::from("/videos/talk.mp4");
+        let result = resolve_label_output_path(&source, None).unwrap();
+        assert_eq!(result, PathBuf::from("/videos/talk_labeled.mp4"));
+    }
+
+    #[test]
+    fn label_output_directory_resolves_inside() {
+        let dir = std::env::temp_dir().join("vidcapture_label_dir_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.parent().unwrap().join("talk.mp4");
+        let result = resolve_label_output_path(&source, Some(&dir)).unwrap();
+        assert_eq!(
+            result,
+            dir.join("talk_labeled.mp4"),
+            "should place talk_labeled.mp4 inside the output directory"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn label_output_file_keeps_the_given_name_as_mp4() {
+        let result =
+            resolve_label_output_path(Path::new("/videos/talk.mov"), Some(Path::new("/tmp/out.mkv")))
+                .unwrap();
+        assert_eq!(result, PathBuf::from("/tmp/out.mp4"));
+    }
+
+    #[test]
+    fn label_refuses_to_overwrite_the_source_video() {
+        let dir = std::env::temp_dir().join("vidcapture_label_overwrite_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mp4");
+        std::fs::write(&source, b"video").unwrap();
+
+        let err = resolve_label_output_path(&source, Some(&source)).unwrap_err();
+        assert!(
+            err.to_string().contains("Refusing to overwrite source"),
+            "should refuse to write over the source, got: {}",
+            err
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A labeled video is a new file every time — a second pass over the same
+    /// source must not overwrite the first one's result.
+    #[test]
+    fn label_output_auto_increments_on_collision() {
+        let dir = std::env::temp_dir().join("vidcapture_label_collision_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("talk.mp4");
+        std::fs::write(&source, b"video").unwrap();
+        std::fs::write(dir.join("talk_labeled.mp4"), b"first").unwrap();
+
+        let result = resolve_label_output_path(&source, None).unwrap();
+        assert_eq!(result, dir.join("talk_labeled_1.mp4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- remove_partial_output ----
+
+    #[test]
+    fn remove_partial_output_deletes_the_file_and_tolerates_a_missing_one() {
+        let dir = std::env::temp_dir().join("vidcapture_partial_output_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let partial = dir.join("half_written.mp4");
+        std::fs::write(&partial, b"partial").unwrap();
+        remove_partial_output(&partial);
+        assert!(!partial.exists(), "a partial output should be deleted");
+
+        // A run that failed before ffmpeg wrote anything leaves nothing behind.
+        remove_partial_output(&partial);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- resolve_cut_output_path (issue #19 acceptance criteria) ----

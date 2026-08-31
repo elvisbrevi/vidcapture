@@ -1,6 +1,6 @@
 # vidcapture
 
-CLI screen and audio recorder for macOS. Captures full screen + system audio + microphone via ffmpeg, with timed and interval-based recording modes. It also cuts a range out of an existing video file.
+CLI screen and audio recorder for macOS. Captures full screen + system audio + microphone via ffmpeg, with timed and interval-based recording modes. It also cuts a range out of an existing video file, and draws timed text labels onto one.
 
 ## Language
 
@@ -44,6 +44,22 @@ _Avoid_: selection, window, slice
 How long the cut range lasts (`--length`). Equivalent to `--to` minus `--from`; the two ways of expressing a cut range are mutually exclusive.
 _Avoid_: size, amount
 
+**Label**:
+A piece of text drawn onto a video for a fixed span of time. One `vidcapture label` invocation reads a source video, draws every label given to it, and writes one new MP4. A label never modifies the source video.
+_Avoid_: caption, subtitle, overlay, annotation, watermark
+
+**Label window**:
+The span a single label is visible for, expressed as a start offset (`from=`) plus either an end offset (`to=`) or a length (`length=`). Offsets are measured from the beginning of the source video, exactly as a cut range's are.
+_Avoid_: range, interval, duration, timeframe
+
+**Label spec**:
+The `key=value` string given to one `-l/--label` flag, describing one label: its text, its label window, and how it is drawn. One `-l` per label; there is no limit on how many a single invocation takes.
+_Avoid_: descriptor, definition, config
+
+**Label background**:
+The colored band drawn behind a label's text so the text stays readable over the footage. Optional — a label with no `background=` is drawn bare.
+_Avoid_: box, banner, highlight, fill
+
 **Timespec**:
 A user-supplied point in time or span of time, accepted anywhere the CLI takes a time value. Two notations: unit-suffixed (`10s`, `1500ms`, `1h30m`, `1.5s`) and timestamp (`00:01:30.500`). Resolved to millisecond precision.
 _Avoid_: duration string, time format
@@ -65,3 +81,11 @@ _Avoid_: duration string, time format
 > **Dev**: "What if they pass both `--to` and `--length`?"
 >
 > **Domain expert**: "That's an error. A cut range is either an end offset or a cut length, never both."
+>
+> **Dev**: "And `vidcapture label talk.mp4 -l \"text=Intro,from=1m32s,to=2m,position=top\"`?"
+>
+> **Domain expert**: "One label. Its label window runs from a minute and a half in to the two-minute mark, and it's drawn across the top of the frame for that whole window and nowhere else. Add another `-l` and you get a second label — they're independent, so two can be on screen at once."
+>
+> **Dev**: "What if a label window starts after the video ends?"
+>
+> **Domain expert**: "We still write the video and we warn. The label simply never appears, and the user should hear that rather than go looking for it."
