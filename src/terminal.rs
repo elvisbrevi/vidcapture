@@ -135,6 +135,11 @@ pub fn print_cut_saved(path: &std::path::Path) {
     eprintln!("Cut saved to {}", path.display());
 }
 
+/// Print the saved labeled-video path to stderr.
+pub fn print_label_saved(path: &std::path::Path) {
+    eprintln!("Labeled video saved to {}", path.display());
+}
+
 /// Print a colored warning message to stderr.
 pub fn print_warning(msg: &str) {
     eprintln!("\x1b[33mwarning\x1b[0m: {}", msg);
@@ -159,6 +164,7 @@ pub fn format_help() -> String {
     help.push_str("COMMANDS:\n");
     help.push_str("    start    Start capturing screen and audio\n");
     help.push_str("    cut      Cut a range out of an existing video file\n");
+    help.push_str("    label    Draw timed text labels onto an existing video file\n");
     help.push_str("    help     Show this help message with setup instructions\n\n");
 
     help.push_str("FLAGS (start):\n");
@@ -182,6 +188,39 @@ pub fn format_help() -> String {
     help.push_str("        --fast               Stream-copy instead of re-encoding.\n");
     help.push_str("    -v, --verbose            Show ffmpeg output.\n");
     help.push_str("    cut requires ffmpeg but not BlackHole, and never touches the source video.\n\n");
+
+    help.push_str("FLAGS (label):\n");
+    help.push_str("    <SOURCE>                 Path to the source video file. Required.\n");
+    help.push_str("    -l, --label <SPEC>       A label spec. Repeat -l once per label. Required.\n");
+    help.push_str("                             Example: -l \"text=Intro,from=1m32s,to=2m,position=top\"\n");
+    help.push_str("        --font <PATH>        Font file to draw labels with.\n");
+    help.push_str("                             Default: the system font ffmpeg resolves.\n");
+    help.push_str("                             Example: /System/Library/Fonts/Helvetica.ttc\n");
+    help.push_str("    -o, --output <PATH>      Output file or directory.\n");
+    help.push_str("                             Default: <source>_labeled.mp4 beside the source.\n");
+    help.push_str("    -v, --verbose            Show ffmpeg output.\n");
+    help.push_str("    label re-encodes the video and never touches the source video.\n\n");
+
+    help.push_str("LABEL SPEC:\n");
+    help.push_str("    A comma-separated list of key=value pairs describing one label:\n");
+    help.push_str("    the text, the label window it is visible for, and how it is drawn.\n");
+    help.push_str("    Only text and one end of the window are required — a label with no\n");
+    help.push_str("    styling is drawn in white at 32px on a translucent black band.\n");
+    help.push('\n');
+    help.push_str("    text=<TEXT>              The text drawn on the video. Required.\n");
+    help.push_str("    from=<TIME>              Start of the label window (default: 0s).\n");
+    help.push_str("    to=<TIME>                End of the label window. Conflicts with length.\n");
+    help.push_str("    length=<TIME>            How long the label window lasts. Conflicts with to.\n");
+    help.push_str("    position=top|bottom      Where the label sits in the frame (default: bottom).\n");
+    help.push_str("    color=<COLOR>            Text color (default: white).\n");
+    help.push_str("    size=<PIXELS>            Font size in pixels (default: 32).\n");
+    help.push_str("    background=<COLOR>       Color of the band drawn behind the text.\n");
+    help.push_str("                             Default: black@0.5. Use background=none for no band.\n");
+    help.push('\n');
+    help.push_str("    Colors are ffmpeg color names or #RRGGBB, with an optional alpha\n");
+    help.push_str("    suffix: white, yellow, #ffcc00, black@0.5.\n");
+    help.push_str("    Time values use the same timespec as every other flag (see below).\n");
+    help.push_str("    Write a literal comma in text as \\, and a literal backslash as \\\\.\n\n");
 
     help.push_str("DURATION FORMAT:\n");
     help.push_str("    A timespec is one of two notations:\n");
@@ -233,6 +272,17 @@ pub fn format_help() -> String {
     help.push_str("    vidcapture cut talk.mp4 --length 5s   # First 5 seconds\n");
     help.push_str("    vidcapture cut talk.mp4 --from 10s --to 25s  # From 10s to 25s\n");
     help.push_str("    vidcapture cut talk.mp4 --from 10s --length 1.5s  # 1.5s starting at 10s\n");
+    help.push('\n');
+    help.push_str("    # A label across the bottom from 1m32s to 2m:\n");
+    help.push_str("    vidcapture label talk.mp4 -l \"text=Setting up,from=1m32s,to=2m\"\n");
+    help.push('\n');
+    help.push_str("    # Two labels, one moved to the top and one restyled:\n");
+    help.push_str("    vidcapture label talk.mp4 \\\n");
+    help.push_str("        -l \"text=Intro,from=0s,to=1m,position=top\" \\\n");
+    help.push_str("        -l \"text=Live demo,from=1m,length=90s,color=#ffcc00,size=48\"\n");
+    help.push('\n');
+    help.push_str("    # A label with no band behind it:\n");
+    help.push_str("    vidcapture label talk.mp4 -l \"text=Plain,to=10s,background=none\"\n");
 
     help
 }
@@ -526,5 +576,78 @@ mod tests {
         );
         assert!(line.contains("5m00s elapsed"), "got: {}", line);
         assert!(line.contains("1h25m10s remaining"), "got: {}", line);
+    }
+
+    #[test]
+    fn format_help_documents_label_command() {
+        let help = format_help();
+        assert!(
+            help.contains("label"),
+            "help text should mention the 'label' command"
+        );
+        assert!(
+            help.contains("-l, --label"),
+            "help text should document the repeatable label flag"
+        );
+        assert!(
+            help.contains("--font"),
+            "help text should document the --font flag"
+        );
+    }
+
+    #[test]
+    fn format_help_documents_every_label_spec_key() {
+        let help = format_help();
+        for key in [
+            "text=",
+            "from=",
+            "to=",
+            "length=",
+            "position=",
+            "color=",
+            "size=",
+            "background=",
+        ] {
+            assert!(
+                help.contains(key),
+                "help text should document the '{}' key",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn format_help_documents_label_positions_and_colors() {
+        let help = format_help();
+        assert!(
+            help.contains("top") && help.contains("bottom"),
+            "help text should list both label positions"
+        );
+        assert!(
+            help.contains("black@0.5"),
+            "help text should show a color with an alpha suffix"
+        );
+    }
+
+    #[test]
+    fn format_help_includes_a_label_example() {
+        let help = format_help();
+        assert!(
+            help.contains("vidcapture label"),
+            "help text should include a label example"
+        );
+        assert!(
+            help.contains("from=1m32s"),
+            "help text should show a label window in the examples"
+        );
+    }
+
+    #[test]
+    fn format_help_notes_label_leaves_the_source_video_alone() {
+        let help = format_help();
+        assert!(
+            help.contains("label re-encodes the video and never touches the source video."),
+            "help text should say a label pass leaves the source alone"
+        );
     }
 }

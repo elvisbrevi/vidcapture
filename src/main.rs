@@ -2,6 +2,7 @@ mod capture;
 mod cli;
 mod cut;
 mod ffmpeg;
+mod label;
 mod output;
 mod terminal;
 
@@ -20,6 +21,7 @@ fn main() {
     let result = match args.command {
         Command::Start(start_args) => run_capture(start_args),
         Command::Cut(cut_args) => cut::run(cut_args),
+        Command::Label(label_args) => label::run(label_args),
         Command::Help => {
             terminal::print_help();
             Ok(())

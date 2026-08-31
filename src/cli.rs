@@ -19,6 +19,8 @@ pub enum Command {
     Start(StartArgs),
     /// Cut a range out of an existing video file
     Cut(CutArgs),
+    /// Draw timed text labels onto an existing video file
+    Label(LabelArgs),
     /// Show help with setup instructions
     Help,
 }
@@ -87,39 +89,308 @@ impl CutArgs {
     /// - `--from` >= `--to`
     /// - `--length` is zero
     pub fn validate_cut_range(&self) -> Result<CutRange, String> {
-        let length = match (self.to, self.length) {
-            (None, None) => {
-                return Err(
-                    "Neither --to nor --length specified. \
-                     One of them is required."
-                        .to_string(),
-                );
-            }
-            (Some(to), None) => {
-                if self.from >= to {
-                    return Err(format!(
-                        "--from ({}) must be less than --to ({})",
-                        format_duration(self.from),
-                        format_duration(to),
-                    ));
-                }
-                to - self.from
-            }
-            (None, Some(len)) => {
-                if len.is_zero() {
-                    return Err("--length must be greater than zero".to_string());
-                }
-                len
-            }
-            // Both --to and --length: clap's conflicts_with prevents this.
-            (Some(_), Some(_)) => unreachable!("clap conflicts_with should have rejected this"),
-        };
-
-        Ok(CutRange {
-            start: self.from,
-            length,
-        })
+        let (start, length) =
+            resolve_start_and_length(self.from, self.to, self.length, &RangeSpelling::CUT_FLAGS)?;
+        Ok(CutRange { start, length })
     }
+}
+
+/// How the user spells the three range options, so a validation error names
+/// what they typed: `--from` on `cut`, `from=` inside a label spec.
+struct RangeSpelling {
+    from: &'static str,
+    to: &'static str,
+    length: &'static str,
+}
+
+impl RangeSpelling {
+    const CUT_FLAGS: Self = Self {
+        from: "--from",
+        to: "--to",
+        length: "--length",
+    };
+    const LABEL_KEYS: Self = Self {
+        from: "from=",
+        to: "to=",
+        length: "length=",
+    };
+}
+
+/// Resolve a start offset plus either an end offset or a length into the
+/// `(start, length)` pair ffmpeg is given.
+///
+/// A cut range and a label window are validated by the same three rules — one
+/// of the two ends is required, the start must precede the end, and a length
+/// must be positive — so both go through here.
+fn resolve_start_and_length(
+    from: Duration,
+    to: Option<Duration>,
+    length: Option<Duration>,
+    spelling: &RangeSpelling,
+) -> Result<(Duration, Duration), String> {
+    match (to, length) {
+        (None, None) => Err(format!(
+            "Neither {} nor {} specified. One of them is required.",
+            spelling.to, spelling.length
+        )),
+        (Some(to), None) => {
+            if from >= to {
+                return Err(format!(
+                    "{} ({}) must be less than {} ({})",
+                    spelling.from,
+                    format_duration(from),
+                    spelling.to,
+                    format_duration(to),
+                ));
+            }
+            Ok((from, to - from))
+        }
+        (None, Some(len)) => {
+            if len.is_zero() {
+                return Err(format!("{} must be greater than zero", spelling.length));
+            }
+            Ok((from, len))
+        }
+        // On `cut` clap's conflicts_with rejects this first; a label spec has
+        // no clap guard, so the rule is enforced here.
+        (Some(_), Some(_)) => Err(format!(
+            "{} and {} are mutually exclusive.",
+            spelling.to, spelling.length
+        )),
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct LabelArgs {
+    /// Path to the source video file
+    pub source: PathBuf,
+
+    /// A label spec — repeat -l for each label
+    /// (e.g. "text=Intro,from=1m32s,to=2m,position=top")
+    #[arg(short = 'l', long = "label", value_name = "SPEC", required = true,
+          value_parser = parse_label_spec)]
+    pub labels: Vec<Label>,
+
+    /// Font file to draw labels with (default: the system font)
+    #[arg(long, value_name = "PATH")]
+    pub font: Option<PathBuf>,
+
+    /// Output file or directory
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Show ffmpeg output
+    #[arg(short, long)]
+    pub verbose: bool,
+}
+
+/// Where in the frame a label is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LabelPosition {
+    Top,
+    #[default]
+    Bottom,
+}
+
+/// Text color used when a label spec does not set `color=`.
+const DEFAULT_LABEL_COLOR: &str = "white";
+
+/// Font size, in pixels, used when a label spec does not set `size=`.
+const DEFAULT_LABEL_SIZE: u32 = 32;
+
+/// Label background used when a label spec does not set `background=`.
+///
+/// A label is captioning footage nobody has seen yet, so the readable thing —
+/// light text on a dark band — is what a spec that says nothing about styling
+/// gets. `background=none` draws the text bare instead.
+const DEFAULT_LABEL_BACKGROUND: &str = "black@0.5";
+
+/// The `background=` value that turns the band off, rather than naming a color
+/// for it.
+const NO_LABEL_BACKGROUND: &str = "none";
+
+/// One validated label: its text, the label window it is visible for, and how
+/// it is drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Label {
+    pub text: String,
+    /// Start of the label window, measured from the beginning of the source
+    /// video.
+    pub start: Duration,
+    /// How long the label window lasts.
+    pub length: Duration,
+    pub position: LabelPosition,
+    /// Text color, in ffmpeg's color syntax.
+    pub color: String,
+    /// Font size in pixels.
+    pub size: u32,
+    /// Label background drawn behind the text, in ffmpeg's color syntax.
+    /// `None` draws the text bare, which a spec asks for with
+    /// `background=none`.
+    pub background: Option<String>,
+}
+
+impl Label {
+    /// End of the label window, measured from the beginning of the source
+    /// video.
+    pub fn end(&self) -> Duration {
+        self.start + self.length
+    }
+}
+
+/// Parse one label spec — the value of a single `-l/--label` flag.
+///
+/// A label spec is a comma-separated list of `key=value` pairs. Inside it
+/// `\,` is a literal comma and `\\` a literal backslash, so a label's text may
+/// contain either. Keys and values are trimmed. Recognised keys:
+///
+/// - `text` (required) — the text drawn on the video.
+/// - `from` — start of the label window (default `0s`).
+/// - `to` — end of the label window. Conflicts with `length`.
+/// - `length` — how long the label window lasts. Conflicts with `to`.
+/// - `position` — `top` or `bottom` (default `bottom`).
+/// - `color` — text color (default `white`).
+/// - `size` — font size in pixels (default `32`).
+/// - `background` — color of the band drawn behind the text
+///   (default `black@0.5`; `none` draws the text bare).
+///
+/// Every time-valued key takes the same timespec the rest of the CLI does.
+pub fn parse_label_spec(input: &str) -> Result<Label, String> {
+    let mut text: Option<String> = None;
+    let mut from = Duration::ZERO;
+    let mut to: Option<Duration> = None;
+    let mut length: Option<Duration> = None;
+    let mut position = LabelPosition::default();
+    let mut color = DEFAULT_LABEL_COLOR.to_string();
+    let mut size = DEFAULT_LABEL_SIZE;
+    let mut background = Some(DEFAULT_LABEL_BACKGROUND.to_string());
+    let mut seen: Vec<String> = Vec::new();
+
+    for pair in split_label_pairs(input) {
+        if pair.trim().is_empty() {
+            continue;
+        }
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("Label spec entry is not key=value: '{}'", pair.trim()))?;
+        let key = key.trim().to_lowercase();
+        let value = value.trim();
+
+        if seen.contains(&key) {
+            return Err(format!("Duplicate key in label spec: '{}='", key));
+        }
+        seen.push(key.clone());
+
+        match key.as_str() {
+            "text" => {
+                if value.is_empty() {
+                    return Err("text= must not be empty".to_string());
+                }
+                text = Some(value.to_string());
+            }
+            "from" => from = parse_timespec(value)?,
+            "to" => to = Some(parse_positive_timespec(value)?),
+            "length" => length = Some(parse_positive_timespec(value)?),
+            "position" => position = parse_label_position(value)?,
+            "color" => color = parse_ffmpeg_color(value, "color")?,
+            "background" => background = parse_label_background(value)?,
+            "size" => {
+                size = value.parse::<u32>().map_err(|_| {
+                    format!("Invalid size= value: '{}'. Expected pixels, e.g. 32.", value)
+                })?;
+                if size == 0 {
+                    return Err("size= must be greater than zero".to_string());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "Unknown key in label spec: '{}='. Valid keys: text, from, to, \
+                     length, position, color, size, background.",
+                    key
+                ));
+            }
+        }
+    }
+
+    let text = text.ok_or("Label spec is missing text=")?;
+    let (start, length) = resolve_start_and_length(from, to, length, &RangeSpelling::LABEL_KEYS)?;
+
+    Ok(Label {
+        text,
+        start,
+        length,
+        position,
+        color,
+        size,
+        background,
+    })
+}
+
+/// Split a label spec into its `key=value` entries on unescaped commas,
+/// resolving `\,` to a comma and `\\` to a backslash as it goes.
+///
+/// A backslash before anything else is kept verbatim, so a Windows-style path
+/// or a stray backslash in a label's text survives unchanged.
+fn split_label_pairs(input: &str) -> Vec<String> {
+    let mut pairs = vec![String::new()];
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        let current = pairs.last_mut().expect("pairs is never empty");
+        match ch {
+            '\\' => match chars.peek() {
+                Some(',') | Some('\\') => current.push(chars.next().expect("peeked")),
+                _ => current.push('\\'),
+            },
+            ',' => pairs.push(String::new()),
+            _ => current.push(ch),
+        }
+    }
+
+    pairs
+}
+
+/// Parse a `background=` value: a color for the band, or `none` to draw the
+/// label's text with no band behind it at all.
+fn parse_label_background(value: &str) -> Result<Option<String>, String> {
+    if value.eq_ignore_ascii_case(NO_LABEL_BACKGROUND) {
+        return Ok(None);
+    }
+    Ok(Some(parse_ffmpeg_color(value, "background")?))
+}
+
+fn parse_label_position(value: &str) -> Result<LabelPosition, String> {
+    match value.to_lowercase().as_str() {
+        "top" => Ok(LabelPosition::Top),
+        "bottom" => Ok(LabelPosition::Bottom),
+        _ => Err(format!(
+            "Invalid position= value: '{}'. Expected top or bottom.",
+            value
+        )),
+    }
+}
+
+/// Accept a color in ffmpeg's syntax: a name (`white`) or a hex triplet
+/// (`#RRGGBB`), either optionally carrying an `@<alpha>` suffix.
+///
+/// The charset is restricted rather than fully parsed. That is enough to catch
+/// typos, and it keeps a label spec from smuggling `:` or `'` into the
+/// filtergraph, where they would be read as filter syntax rather than a color.
+fn parse_ffmpeg_color(value: &str, key: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err(format!("{}= must not be empty", key));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '#' | '@' | '.' | '_' | '-'))
+    {
+        return Err(format!(
+            "Invalid {}= value: '{}'. Expected a color name (white), a hex color \
+             (#RRGGBB), optionally with an alpha suffix (black@0.5).",
+            key, value
+        ));
+    }
+    Ok(value.to_string())
 }
 
 /// Format a duration for user-facing error messages.
@@ -656,5 +927,276 @@ mod tests {
         let range = cut_args.validate_cut_range().unwrap();
         assert_eq!(range.start, Duration::ZERO);
         assert_eq!(range.length, Duration::from_secs(5));
+    }
+
+    // ---- label subcommand tests ----
+
+    fn label_from(spec: &str) -> Label {
+        parse_label_spec(spec)
+            .unwrap_or_else(|e| panic!("expected '{}' to parse, got error: {}", spec, e))
+    }
+
+    #[test]
+    fn parse_label_spec_reads_every_key() {
+        let label = label_from(
+            "text=Intro,from=1m32s,to=2m,position=top,color=#ffcc00,size=48,background=black@0.5",
+        );
+        assert_eq!(label.text, "Intro");
+        assert_eq!(label.start, Duration::from_millis(92_000));
+        assert_eq!(label.length, Duration::from_millis(28_000));
+        assert_eq!(label.end(), Duration::from_millis(120_000));
+        assert_eq!(label.position, LabelPosition::Top);
+        assert_eq!(label.color, "#ffcc00");
+        assert_eq!(label.size, 48);
+        assert_eq!(label.background.as_deref(), Some("black@0.5"));
+    }
+
+    #[test]
+    fn parse_label_spec_defaults_everything_but_the_label_window() {
+        let label = label_from("text=Hello,to=5s");
+        assert_eq!(label.start, Duration::ZERO);
+        assert_eq!(label.length, Duration::from_secs(5));
+        assert_eq!(label.position, LabelPosition::Bottom);
+        assert_eq!(label.color, "white");
+        assert_eq!(label.size, 32);
+        assert_eq!(label.background.as_deref(), Some("black@0.5"));
+    }
+
+    /// Styling is optional, but a bare label spec is still readable: it gets
+    /// white text at 32px on a dark band, not raw text on the footage.
+    #[test]
+    fn parse_label_spec_defaults_to_readable_styling() {
+        let label = label_from("text=Hello,to=5s");
+        assert_eq!(label.color, DEFAULT_LABEL_COLOR);
+        assert_eq!(label.size, DEFAULT_LABEL_SIZE);
+        assert_eq!(label.background.as_deref(), Some(DEFAULT_LABEL_BACKGROUND));
+    }
+
+    #[test]
+    fn parse_label_spec_background_none_draws_the_text_bare() {
+        for value in ["none", "NONE", "None"] {
+            let label = label_from(&format!("text=Hello,to=5s,background={}", value));
+            assert_eq!(label.background, None, "background={}", value);
+        }
+    }
+
+    #[test]
+    fn parse_label_spec_accepts_length_instead_of_to() {
+        let label = label_from("text=Hello,from=10s,length=1500ms");
+        assert_eq!(label.start, Duration::from_secs(10));
+        assert_eq!(label.length, Duration::from_millis(1_500));
+    }
+
+    /// The label window takes the same timespec as every other time-valued
+    /// flag, in both notations.
+    #[test]
+    fn parse_label_spec_accepts_both_timespec_notations() {
+        let label = label_from("text=Hello,from=00:01:30.500,to=00:02:00");
+        assert_eq!(label.start, Duration::from_millis(90_500));
+        assert_eq!(label.end(), Duration::from_millis(120_000));
+    }
+
+    #[test]
+    fn parse_label_spec_keeps_an_escaped_comma_in_the_text() {
+        let label = label_from(r"text=Intro\, part one,to=5s");
+        assert_eq!(label.text, "Intro, part one");
+    }
+
+    #[test]
+    fn parse_label_spec_keeps_an_escaped_backslash_in_the_text() {
+        let label = label_from(r"text=back\\slash,to=5s");
+        assert_eq!(label.text, r"back\slash");
+    }
+
+    /// A backslash that escapes nothing the spec defines is part of the text,
+    /// so a path or a stray backslash survives without being doubled.
+    #[test]
+    fn parse_label_spec_keeps_a_lone_backslash_in_the_text() {
+        let label = label_from(r"text=C:\Users,to=5s");
+        assert_eq!(label.text, r"C:\Users");
+    }
+
+    #[test]
+    fn parse_label_spec_trims_whitespace_around_keys_and_values() {
+        let label = label_from("text = Hello , from = 1s , to = 5s , position = TOP");
+        assert_eq!(label.text, "Hello");
+        assert_eq!(label.start, Duration::from_secs(1));
+        assert_eq!(label.position, LabelPosition::Top);
+    }
+
+    #[test]
+    fn parse_label_spec_keeps_an_equals_sign_inside_the_text() {
+        let label = label_from("text=a=b,to=5s");
+        assert_eq!(label.text, "a=b");
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_a_spec_without_text() {
+        let error = parse_label_spec("from=1s,to=5s").unwrap_err();
+        assert!(
+            error.contains("text="),
+            "error should name the missing key, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_an_empty_text() {
+        assert!(parse_label_spec("text=,to=5s").is_err());
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_a_spec_without_an_end() {
+        let error = parse_label_spec("text=Hello,from=1s").unwrap_err();
+        assert!(
+            error.contains("to=") && error.contains("length="),
+            "error should name both ways to end a label window, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_both_to_and_length() {
+        assert!(parse_label_spec("text=Hello,to=5s,length=2s").is_err());
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_a_label_window_that_ends_before_it_starts() {
+        assert!(parse_label_spec("text=Hello,from=10s,to=5s").is_err());
+        assert!(parse_label_spec("text=Hello,from=5s,to=5s").is_err());
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_an_unknown_key() {
+        let error = parse_label_spec("text=Hello,to=5s,align=left").unwrap_err();
+        assert!(
+            error.contains("align"),
+            "error should name the unknown key, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_a_duplicate_key() {
+        let error = parse_label_spec("text=Hello,to=5s,text=Bye").unwrap_err();
+        assert!(
+            error.contains("Duplicate"),
+            "error should call out the duplicate, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_an_entry_that_is_not_key_value() {
+        assert!(parse_label_spec("text=Hello,to=5s,oops").is_err());
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_an_invalid_position() {
+        let error = parse_label_spec("text=Hello,to=5s,position=middle").unwrap_err();
+        assert!(
+            error.contains("top") && error.contains("bottom"),
+            "error should list the positions, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn parse_label_spec_rejects_an_invalid_size() {
+        assert!(parse_label_spec("text=Hello,to=5s,size=big").is_err());
+        assert!(parse_label_spec("text=Hello,to=5s,size=0").is_err());
+    }
+
+    /// A color goes into the filtergraph unescaped, so anything that is filter
+    /// syntax rather than a color has to be rejected here.
+    #[test]
+    fn parse_label_spec_rejects_a_color_that_is_filter_syntax() {
+        for spec in [
+            "text=Hello,to=5s,color=white:box=1",
+            "text=Hello,to=5s,background=black'",
+            "text=Hello,to=5s,color=",
+        ] {
+            assert!(
+                parse_label_spec(spec).is_err(),
+                "expected '{}' to be rejected",
+                spec
+            );
+        }
+    }
+
+    #[test]
+    fn parse_label_spec_accepts_the_color_spellings_the_help_documents() {
+        for color in ["white", "#ffcc00", "black@0.5", "0xFF0000"] {
+            let label = label_from(&format!("text=Hello,to=5s,color={}", color));
+            assert_eq!(label.color, color);
+        }
+    }
+
+    #[test]
+    fn parse_label_with_repeated_flags() {
+        let args = Args::try_parse_from([
+            "vidcapture",
+            "label",
+            "talk.mp4",
+            "-l",
+            "text=Intro,from=1m32s,to=2m,position=top",
+            "-l",
+            "text=Demo,from=2m,length=30s",
+        ])
+        .unwrap();
+        match args.command {
+            Command::Label(label_args) => {
+                assert_eq!(label_args.source, PathBuf::from("talk.mp4"));
+                assert_eq!(label_args.labels.len(), 2);
+                assert_eq!(label_args.labels[0].text, "Intro");
+                assert_eq!(label_args.labels[0].position, LabelPosition::Top);
+                assert_eq!(label_args.labels[1].text, "Demo");
+                assert_eq!(label_args.labels[1].position, LabelPosition::Bottom);
+                assert_eq!(label_args.font, None);
+                assert_eq!(label_args.output, None);
+                assert!(!label_args.verbose);
+            }
+            _ => panic!("expected Label command"),
+        }
+    }
+
+    #[test]
+    fn parse_label_with_font_output_and_verbose() {
+        let args = Args::try_parse_from([
+            "vidcapture",
+            "label",
+            "talk.mp4",
+            "-l",
+            "text=Intro,to=5s",
+            "--font",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "-o",
+            "out.mp4",
+            "-v",
+        ])
+        .unwrap();
+        match args.command {
+            Command::Label(label_args) => {
+                assert_eq!(
+                    label_args.font,
+                    Some(PathBuf::from("/System/Library/Fonts/Helvetica.ttc"))
+                );
+                assert_eq!(label_args.output, Some(PathBuf::from("out.mp4")));
+                assert!(label_args.verbose);
+            }
+            _ => panic!("expected Label command"),
+        }
+    }
+
+    #[test]
+    fn parse_label_requires_at_least_one_label() {
+        let result = Args::try_parse_from(["vidcapture", "label", "talk.mp4"]);
+        assert!(result.is_err(), "expected label with no -l to be rejected");
+    }
+
+    #[test]
+    fn parse_label_rejects_an_invalid_spec() {
+        let result = Args::try_parse_from(["vidcapture", "label", "talk.mp4", "-l", "from=1s"]);
+        assert!(result.is_err(), "expected a spec without text= to be rejected");
     }
 }

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+use crate::cli::{Label, LabelPosition};
 use crate::output;
 
 /// Configuration for an ffmpeg capture session.
@@ -204,6 +205,184 @@ pub fn build_cut_command(config: &CutConfig) -> Command {
     cmd.arg(&config.output_path);
 
     cmd
+}
+
+/// Configuration for an ffmpeg label pass (draw timed text onto a video).
+#[derive(Debug, Clone)]
+pub struct LabelConfig {
+    pub source_path: PathBuf,
+    pub labels: Vec<Label>,
+    pub output_path: PathBuf,
+    /// Font file to draw with. `None` lets ffmpeg resolve the system font.
+    pub font: Option<PathBuf>,
+}
+
+impl LabelConfig {
+    pub fn new(source_path: &Path, labels: Vec<Label>, output_path: &Path) -> Self {
+        Self {
+            source_path: source_path.to_path_buf(),
+            labels,
+            output_path: output_path.to_path_buf(),
+            font: None,
+        }
+    }
+
+    pub fn with_font(mut self, font: Option<PathBuf>) -> Self {
+        self.font = font;
+        self
+    }
+}
+
+/// Distance from the top or bottom edge to a label's background, as a
+/// fraction of the frame height. Proportional so a label sits the same
+/// distance in whatever the source resolution is.
+const LABEL_MARGIN_FRACTION: f64 = 0.05;
+
+/// Padding drawn around a label's text to make its background a band rather
+/// than a tight outline. The font size divided by this is the padding in
+/// pixels, so a bigger label gets a proportionally bigger band.
+const LABEL_PADDING_DIVISOR: u32 = 3;
+
+/// Build an ffmpeg command that draws every label onto a source video.
+///
+///   ffmpeg -y -i <source> -vf <drawtext chain> \
+///     -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k <output>
+///
+/// One `drawtext` filter per label, chained in the order the labels were
+/// given, each gated to its own label window by `enable=between(...)`. The
+/// video is always re-encoded — drawing on frames is what the command is for —
+/// so the output is the same H.264/AAC MP4 the rest of the tool produces.
+pub fn build_label_command(config: &LabelConfig) -> Command {
+    let mut cmd = Command::new("ffmpeg");
+
+    cmd.args(["-y"]);
+    cmd.arg("-i").arg(&config.source_path);
+    cmd.arg("-vf")
+        .arg(build_label_filter(&config.labels, config.font.as_deref()));
+
+    cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"]);
+    cmd.args(["-c:a", "aac", "-b:a", "128k"]);
+
+    cmd.arg(&config.output_path);
+
+    cmd
+}
+
+/// Build the `drawtext` chain for `labels`, one filter per label.
+pub fn build_label_filter(labels: &[Label], font: Option<&Path>) -> String {
+    labels
+        .iter()
+        .map(|label| build_drawtext_filter(label, font))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Build the single `drawtext` filter that draws one label.
+fn build_drawtext_filter(label: &Label, font: Option<&Path>) -> String {
+    let padding = match label.background {
+        // No background means no band to pad, so the text sits right on the
+        // margin.
+        None => 0,
+        Some(_) => label.size / LABEL_PADDING_DIVISOR,
+    };
+
+    // Horizontally centred; vertically a margin in from the chosen edge, with
+    // the padding added so the background never overhangs the frame.
+    let y = match label.position {
+        LabelPosition::Top => format!("h*{}+{}", LABEL_MARGIN_FRACTION, padding),
+        LabelPosition::Bottom => format!("h-text_h-h*{}-{}", LABEL_MARGIN_FRACTION, padding),
+    };
+
+    // A label's text is literal: `expansion=none` stops drawtext reading a
+    // `%{...}` in it as an ffmpeg expression, and keeps the escaping below the
+    // same for the text and for the font path.
+    let mut filter = String::from("drawtext=expansion=none:");
+    if let Some(font) = font {
+        filter.push_str(&format!(
+            "fontfile={}:",
+            escape_filter_value(&font.to_string_lossy())
+        ));
+    }
+    filter.push_str(&format!("text={}", escape_filter_value(&label.text)));
+    filter.push_str(&format!(":fontcolor={}", label.color));
+    filter.push_str(&format!(":fontsize={}", label.size));
+    filter.push_str(":x=(w-text_w)/2");
+    filter.push_str(&format!(":y={}", y));
+    if let Some(background) = &label.background {
+        filter.push_str(&format!(
+            ":box=1:boxcolor={}:boxborderw={}",
+            background, padding
+        ));
+    }
+    filter.push_str(&format!(
+        ":enable='between(t,{},{})'",
+        format_seconds(label.start),
+        format_seconds(label.end())
+    ));
+
+    filter
+}
+
+/// Escape a value so ffmpeg's filtergraph parser hands it to a filter option
+/// verbatim.
+///
+/// The value is read twice over — the graph is split into filters and their
+/// options, then each option value is unescaped — and every pass that treats a
+/// character as syntax eats one backslash. So the count a character needs is
+/// set by how many passes it has to survive, and a backslash written for the
+/// inner pass has to survive the outer one itself. Each count below was
+/// verified by rendering the character and reading it back off the frame:
+///
+/// - `,` `;` `[` `]` end a filter or delimit a stream label: one backslash.
+/// - `:` ends an option, and its backslash is then eaten by the option pass:
+///   two.
+/// - `'` quotes an option value: three.
+/// - `\` is the escape character in both passes, so it doubles in each: four.
+///
+/// There is no arm for `%` because [`build_drawtext_filter`] sets
+/// `expansion=none`. Letting `drawtext` expand its own text would add a third
+/// pass, and with it a backslash to every count here.
+fn escape_filter_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str(r"\\\\"),
+            '\'' => escaped.push_str(r"\\\'"),
+            ':' => escaped.push_str(r"\\:"),
+            ',' | ';' | '[' | ']' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+/// Parse the last `time=` token from ffmpeg stderr progress output.
+///
+/// ffmpeg emits lines like `time=00:00:15.00` while encoding, separating
+/// progress updates with a carriage return rather than a newline, so several
+/// tokens can share one `\n`-delimited line. Returns the last one — the length
+/// actually written, which `cut` and `label` both compare against what the
+/// user asked for.
+pub fn parse_written_length(stderr: &str) -> Option<Duration> {
+    stderr.split(['\n', '\r']).rev().find_map(|chunk| {
+        let token: String = chunk
+            .split_once("time=")?
+            .1
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == ':' || *c == '.')
+            .collect();
+        // ffmpeg writes `HH:MM:SS.mmm`; a bare seconds token needs a unit
+        // before the shared timespec parser will take it.
+        let timespec = if token.contains(':') {
+            token
+        } else {
+            format!("{}s", token)
+        };
+        crate::cli::parse_timespec(&timespec).ok()
+    })
 }
 
 /// Run a one-shot ffmpeg command to completion, returning its exit status and
@@ -458,6 +637,60 @@ pub fn blackhole_setup_instructions() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_written_length_reads_hms_token() {
+        assert_eq!(
+            parse_written_length("frame= 1 time=00:00:15.000 bitrate=N/A"),
+            Some(Duration::from_secs(15))
+        );
+    }
+
+    #[test]
+    fn parse_written_length_reads_minutes_seconds_token() {
+        assert_eq!(
+            parse_written_length("time=01:30.500 speed=1x"),
+            Some(Duration::from_millis(90_500))
+        );
+    }
+
+    #[test]
+    fn parse_written_length_finds_last_of_many_newline_separated_updates() {
+        let stderr = "frame=  120 size=  1024kB time=00:00:05.000\n\
+                      frame=  240 size=  2048kB time=00:00:10.000\n\
+                      frame=  360 size=  3072kB time=00:00:15.000";
+        assert_eq!(parse_written_length(stderr), Some(Duration::from_secs(15)));
+    }
+
+    /// ffmpeg overwrites its progress line with `\r`, so a single
+    /// `\n`-delimited line can carry several `time=` tokens. The last one is
+    /// the written range; the first one would under-report it and fire a
+    /// spurious short-cut warning.
+    #[test]
+    fn parse_written_length_finds_last_of_carriage_return_separated_updates() {
+        let stderr = "frame=  120 time=00:00:05.00 speed=1x\r\
+                      frame=  240 time=00:00:10.00 speed=1x\r\
+                      frame=  360 time=00:00:16.50 speed=1x\r\
+                      frame=  480 time=00:00:49.43 speed=1x";
+        assert_eq!(
+            parse_written_length(stderr),
+            Some(Duration::from_millis(49_430))
+        );
+    }
+
+    #[test]
+    fn parse_written_length_ignores_trailing_summary_without_progress() {
+        let stderr = "frame=  120 time=00:00:05.00 speed=1x\r\
+                      frame=  240 time=00:00:12.00 speed=1x\n\
+                      [out#0] video:1024kB audio:64kB muxing overhead: 0.4%\n";
+        assert_eq!(parse_written_length(stderr), Some(Duration::from_secs(12)));
+    }
+
+    #[test]
+    fn parse_written_length_without_time_token() {
+        assert_eq!(parse_written_length("frame=  120 fps=0.0 q=28.0"), None);
+        assert_eq!(parse_written_length(""), None);
+    }
 
     fn base_config() -> CaptureConfig {
         CaptureConfig::new("vidcapture_2026-05-28_14-30-00.mp4".to_string())
@@ -1192,5 +1425,175 @@ ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
                 eprintln!("skipping: {}", e);
             }
         }
+    }
+
+    // ---- label command tests ----
+
+    fn test_label(text: &str) -> Label {
+        Label {
+            text: text.to_string(),
+            start: Duration::from_secs(92),
+            length: Duration::from_secs(28),
+            position: LabelPosition::Bottom,
+            color: "white".to_string(),
+            size: 32,
+            background: None,
+        }
+    }
+
+    #[test]
+    fn label_command_re_encodes_into_an_mp4_with_a_drawtext_chain() {
+        let config = LabelConfig::new(
+            Path::new("talk.mp4"),
+            vec![test_label("Intro")],
+            Path::new("talk_labeled.mp4"),
+        );
+        let args = get_args(&build_label_command(&config));
+
+        let input = args.iter().position(|a| a == "-i").expect("-i");
+        assert_eq!(args[input + 1], "talk.mp4");
+
+        let filter = args.iter().position(|a| a == "-vf").expect("-vf");
+        assert!(args[filter + 1].starts_with("drawtext=expansion=none:"));
+
+        assert!(args.contains(&"libx264".to_string()));
+        assert!(args.contains(&"aac".to_string()));
+        assert_eq!(args.last().unwrap(), "talk_labeled.mp4");
+    }
+
+    #[test]
+    fn label_filter_gates_each_label_to_its_own_label_window() {
+        let filter = build_label_filter(&[test_label("Intro")], None);
+        assert!(
+            filter.contains("enable='between(t,92.000,120.000)'"),
+            "filter should gate the label to its window, got: {}",
+            filter
+        );
+    }
+
+    #[test]
+    fn label_filter_chains_one_drawtext_per_label_in_order() {
+        let mut second = test_label("Demo");
+        second.start = Duration::from_secs(120);
+        let filter = build_label_filter(&[test_label("Intro"), second], None);
+
+        assert_eq!(filter.matches("drawtext=").count(), 2);
+        assert!(
+            filter.find("text=Intro").unwrap() < filter.find("text=Demo").unwrap(),
+            "labels should be drawn in the order given, got: {}",
+            filter
+        );
+    }
+
+    #[test]
+    fn label_filter_places_a_top_label_above_a_bottom_one() {
+        let mut top = test_label("Intro");
+        top.position = LabelPosition::Top;
+        let top_filter = build_label_filter(&[top], None);
+        let bottom_filter = build_label_filter(&[test_label("Intro")], None);
+
+        assert!(
+            top_filter.contains(":y=h*0.05"),
+            "a top label should sit a margin below the top edge, got: {}",
+            top_filter
+        );
+        assert!(
+            bottom_filter.contains(":y=h-text_h-h*0.05"),
+            "a bottom label should sit a margin above the bottom edge, got: {}",
+            bottom_filter
+        );
+        // Both are centred horizontally.
+        assert!(top_filter.contains(":x=(w-text_w)/2"));
+        assert!(bottom_filter.contains(":x=(w-text_w)/2"));
+    }
+
+    #[test]
+    fn label_filter_carries_the_color_and_size() {
+        let mut label = test_label("Intro");
+        label.color = "#ffcc00".to_string();
+        label.size = 48;
+        let filter = build_label_filter(&[label], None);
+
+        assert!(filter.contains(":fontcolor=#ffcc00"), "got: {}", filter);
+        assert!(filter.contains(":fontsize=48"), "got: {}", filter);
+    }
+
+    /// A background is drawn as a padded box, so the text sits inside a band
+    /// rather than against a tight outline.
+    #[test]
+    fn label_filter_draws_a_padded_box_for_a_background() {
+        let mut label = test_label("Intro");
+        label.background = Some("black@0.5".to_string());
+        let filter = build_label_filter(&[label], None);
+
+        assert!(filter.contains(":box=1:boxcolor=black@0.5"), "got: {}", filter);
+        assert!(filter.contains(":boxborderw=10"), "got: {}", filter);
+    }
+
+    /// The padding that keeps the band off the frame edge only exists when
+    /// there is a band, so a bare label sits right on the margin.
+    #[test]
+    fn label_filter_without_a_background_draws_no_box_and_no_padding() {
+        let filter = build_label_filter(&[test_label("Intro")], None);
+
+        assert!(!filter.contains("box=1"), "got: {}", filter);
+        assert!(filter.contains(":y=h-text_h-h*0.05-0"), "got: {}", filter);
+    }
+
+    #[test]
+    fn label_filter_uses_the_font_file_when_one_is_given() {
+        let filter = build_label_filter(&[test_label("Intro")], Some(Path::new("/fonts/My.ttf")));
+        assert!(filter.contains("fontfile=/fonts/My.ttf"), "got: {}", filter);
+
+        let default_filter = build_label_filter(&[test_label("Intro")], None);
+        assert!(!default_filter.contains("fontfile="), "got: {}", default_filter);
+    }
+
+    /// Every count here was verified by rendering the character with ffmpeg
+    /// and reading it back off the frame; they are not interchangeable.
+    #[test]
+    fn escape_filter_value_table() {
+        let cases: &[(&str, &str)] = &[
+            ("plain text", "plain text"),
+            ("a,b", r"a\,b"),
+            ("a;b", r"a\;b"),
+            ("[x]", r"\[x\]"),
+            ("a:b", r"a\\:b"),
+            ("it's", r"it\\\'s"),
+            // `expansion=none` makes `%` an ordinary character.
+            ("50%", "50%"),
+            (r"a\b", r"a\\\\b"),
+            ("a=b", "a=b"),
+            ("Introducción — ¿listo?", "Introducción — ¿listo?"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(&escape_filter_value(input), expected, "input: '{}'", input);
+        }
+    }
+
+    /// A label's text is literal. Without `expansion=none` drawtext would read
+    /// `%{pts}` in it as an ffmpeg expression and draw a timestamp instead.
+    #[test]
+    fn label_filter_turns_off_drawtext_text_expansion() {
+        let filter = build_label_filter(&[test_label("50% done %{pts}")], None);
+
+        assert!(filter.starts_with("drawtext=expansion=none:"), "got: {}", filter);
+        assert!(filter.contains("text=50% done %{pts}"), "got: {}", filter);
+    }
+
+    /// A label's text reaches drawtext as one option value, so nothing in it
+    /// can be read as another option or another filter.
+    #[test]
+    fn label_filter_escapes_text_that_looks_like_filter_syntax() {
+        let filter = build_label_filter(&[test_label("x:y,drawtext=text=pwned")], None);
+
+        // The comma and colon come back escaped, so the text stays one option
+        // value instead of opening a second filter.
+        assert!(filter.contains(r"x\\:y\,drawtext=text=pwned"), "got: {}", filter);
+        assert!(
+            filter.ends_with("enable='between(t,92.000,120.000)'"),
+            "the enable gate must still terminate the filter, got: {}",
+            filter
+        );
     }
 }
