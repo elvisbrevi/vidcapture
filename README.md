@@ -50,9 +50,10 @@ No GUI, no project files, no export dialog — one binary that shells out to
 
 - macOS (uses `ScreenCaptureKit` via `ffmpeg`'s `avfoundation` input; not
   portable to Linux/Windows).
-- [ffmpeg](https://ffmpeg.org): `brew install ffmpeg`. `label` additionally
-  needs an ffmpeg built with libfreetype for its `drawtext` filter — the
-  Homebrew build is.
+- [ffmpeg](https://ffmpeg.org): `brew install ffmpeg` for `start` and `cut`.
+  `label` needs the `drawtext` filter: run `brew install ffmpeg-full`, then
+  `export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"` so vidcapture uses
+  that build. Homebrew keeps `ffmpeg-full` outside the default PATH.
 - [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole), only for
   `start` (system audio capture): `brew install blackhole-2ch`, then a
   one-time Multi-Output Device setup — run `vidcapture help` for the exact
@@ -128,18 +129,18 @@ into the pixels, so re-labeling means going back to the source.
 Every flag, the full timespec grammar, and BlackHole setup instructions are
 in `vidcapture help`.
 
-## Claude Code integration
+## Agent skill
 
-This repo ships a [Claude Code](https://claude.com/claude-code) skill
-(`.claude/skills/ship-feature/SKILL.md`) that encodes the project's own
-build/review loop — where the spec and coding standards live, module
-ownership rules, and known test gotchas — for anyone extending vidcapture
-with Claude Code.
+This repo ships a portable `vidcapture` development skill at
+`.agents/skills/vidcapture/SKILL.md`. [Codex](https://openai.com/codex/)
+and [OpenCode](https://opencode.ai/) discover it from `.agents/skills/`;
+[Claude Code](https://claude.com/claude-code) uses the compatibility path
+`.claude/skills/vidcapture/`, which points to the same source.
 
-A release build (`cargo install`, `cargo build --release`) copies it to
-`~/.claude/skills/vidcapture-ship-feature/`, kept in sync on every reinstall.
-This never touches a debug build, and is skipped entirely if `~/.claude`
-doesn't exist or `VIDCAPTURE_SKIP_SKILL_INSTALL=1` is set. See `build.rs`.
+A release build (`cargo install`, `cargo build --release`) installs the skill
+to `~/.agents/skills/vidcapture/` and `~/.claude/skills/vidcapture/`. Debug
+builds do not install it. Set `VIDCAPTURE_SKIP_SKILL_INSTALL=1` to skip the
+installation. See `build.rs`.
 
 ## Design docs
 

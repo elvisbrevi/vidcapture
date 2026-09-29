@@ -86,8 +86,9 @@ fn diagnose_drawtext_failure(stderr: &str) -> Option<String> {
     if stderr.contains("No such filter: 'drawtext'") {
         return Some(String::from(
             "This ffmpeg was built without the drawtext filter, which labels need.\n\
-             Install one built with libfreetype:\n\
-                  brew install ffmpeg",
+             Install Homebrew's full build with libfreetype and put it first on PATH:\n\
+                  brew install ffmpeg-full\n\
+                  export PATH=\"$(brew --prefix ffmpeg-full)/bin:$PATH\"",
         ));
     }
     if stderr.contains("Cannot find a valid font")
@@ -116,6 +117,8 @@ mod tests {
             "should name what the ffmpeg build is missing, got: {}",
             diagnosis
         );
+        assert!(diagnosis.contains("brew install ffmpeg-full"));
+        assert!(diagnosis.contains("brew --prefix ffmpeg-full"));
     }
 
     #[test]

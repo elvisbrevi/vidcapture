@@ -1,8 +1,8 @@
 [package]
 name = "vidcapture"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "CLI screen and audio recorder for macOS, with millisecond-precise cutting of existing recordings."
+description = "macOS CLI to record screen and audio, cut videos precisely, and add timed text labels with ffmpeg."
 license = "MIT"
 repository = "https://github.com/elvisbrevi/vidcapture"
 authors = ["Elvis Brevi <elvisbrevi@gmail.com>"]

@@ -247,6 +247,9 @@ pub fn format_help() -> String {
 
     help.push_str("  1. Install ffmpeg:\n");
     help.push_str("       brew install ffmpeg\n");
+    help.push_str("     For labels, install ffmpeg-full and put it first on PATH:\n");
+    help.push_str("       brew install ffmpeg-full\n");
+    help.push_str("       export PATH=\"$(brew --prefix ffmpeg-full)/bin:$PATH\"\n");
     help.push_str("     Verify with: ffmpeg -version\n\n");
 
     help.push_str("  2. Install BlackHole 2ch (for system audio capture):\n");
@@ -475,6 +478,7 @@ mod tests {
             help.contains("brew install ffmpeg"),
             "help text should include the ffmpeg install command"
         );
+        assert!(help.contains("brew install ffmpeg-full"));
     }
 
     #[test]
