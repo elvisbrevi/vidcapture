@@ -1,4 +1,6 @@
 use std::io;
+#[cfg(any(not(unix), test))]
+use std::io::Write;
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
@@ -35,6 +37,11 @@ impl FfmpegProcess for RealFfmpegProcess {
     fn spawn(&mut self) -> anyhow::Result<()> {
         let mut cmd = build_capture_command(&self.config);
 
+        // ffmpeg reads its stdin as a keyboard. A pipe keeps it from competing
+        // with the stop-key listener for the terminal's key presses, and is
+        // how a stop reaches it where there are no signals.
+        cmd.stdin(Stdio::piped());
+
         if !self.config.verbose {
             cmd.stderr(Stdio::null());
         }
@@ -61,8 +68,11 @@ impl FfmpegProcess for RealFfmpegProcess {
                 }
             }
 
+            // Without signals, ask the way ffmpeg's own `q` key does, which
+            // finalizes the MP4 trailer too. Child::kill would terminate it
+            // mid-write and leave the recording corrupt.
             #[cfg(not(unix))]
-            child.kill()?;
+            send_quit_key(child)?;
         }
         Ok(())
     }
@@ -93,6 +103,20 @@ impl FfmpegProcess for RealFfmpegProcess {
         // We can't capture it after the fact without storing the handle
         // For now, return None - verbose mode shows stderr directly
         None
+    }
+}
+
+/// Press ffmpeg's `q` key through its stdin pipe: ffmpeg stops reading its
+/// inputs, writes the MP4 trailer, and exits 0.
+#[cfg(any(not(unix), test))]
+fn send_quit_key(child: &mut Child) -> io::Result<()> {
+    let Some(stdin) = child.stdin.as_mut() else {
+        return Ok(());
+    };
+    match stdin.write_all(b"q").and_then(|_| stdin.flush()) {
+        // ffmpeg already exited and closed the pipe; there is nothing to stop.
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
     }
 }
 
@@ -269,6 +293,61 @@ mod tests {
         fn take_stderr(&mut self) -> Option<Vec<u8>> {
             None
         }
+    }
+
+    /// The stop Windows sends: ffmpeg must finish the MP4 — trailer and all —
+    /// and exit 0, as it does for a SIGINT on Unix.
+    #[test]
+    fn quit_key_stops_ffmpeg_with_a_playable_recording() {
+        let dir = std::env::temp_dir().join("vidcapture_capture_quit_key");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("recording.mp4");
+
+        let mut child = std::process::Command::new("ffmpeg")
+            .args(["-y", "-re", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10"])
+            .args(["-c:v", "libx264", "-preset", "ultrafast"])
+            .arg(&output)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("ffmpeg should be available");
+        thread::sleep(Duration::from_millis(1500));
+
+        send_quit_key(&mut child).unwrap();
+        let status = child.wait().unwrap();
+
+        assert!(status.success(), "ffmpeg should exit cleanly, got {}", status);
+        let probe = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&output)
+            .args(["-f", "null", "-"])
+            .output()
+            .unwrap();
+        assert!(
+            probe.status.success() && probe.stderr.is_empty(),
+            "recording should decode without errors, got: {}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ffmpeg can finish on its own (a `-d` duration) just before a stop is
+    /// requested; its stdin is closed by then, and that is not an error.
+    #[test]
+    fn quit_key_after_ffmpeg_has_exited_is_not_an_error() {
+        let mut child = std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("ffmpeg should be available");
+        child.wait().unwrap();
+
+        send_quit_key(&mut child).expect("a closed pipe means ffmpeg already stopped");
     }
 
     #[test]

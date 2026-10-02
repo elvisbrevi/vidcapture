@@ -5,7 +5,7 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(
     name = "vidcapture",
-    about = "CLI screen and audio recorder for macOS",
+    about = "CLI screen and audio recorder for macOS, Linux, and Windows",
     disable_help_subcommand = true
 )]
 pub struct Args {

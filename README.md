@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/vidcapture.svg)](https://crates.io/crates/vidcapture)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
 
 **Website:** <https://vidcapture.elvisbrevi.cl>
 
@@ -27,7 +27,9 @@ No GUI, no project files, no export dialog — one binary that shells out to
 ## Features
 
 - **`start`** — records the full screen plus system audio and microphone,
-  mixed into one track, as H.264/AAC MP4.
+  mixed into one track, as H.264/AAC MP4, on macOS, Linux, and Windows.
+  System audio is optional: without a loopback device, `start` records the
+  screen and microphone, and says so before it begins.
 - **Stop on demand or on a timer** — press `s` to stop, or set `-d 30s` /
   `-d 2m` to stop automatically.
 - **Interval mode** (`-e 10s`) — splits a long recording into seamless,
@@ -50,17 +52,35 @@ No GUI, no project files, no export dialog — one binary that shells out to
 
 ## Requirements
 
-- macOS (uses `ScreenCaptureKit` via `ffmpeg`'s `avfoundation` input; not
-  portable to Linux/Windows).
-- [ffmpeg](https://ffmpeg.org): `brew install ffmpeg` for `start` and `cut`.
-  `label` needs the `drawtext` filter: run `brew install ffmpeg-full`, then
+[ffmpeg](https://ffmpeg.org) is the only requirement. A loopback device for
+system audio is optional; without one, `start` records the screen and
+microphone and warns that system audio is missing. **`cut` and `label` need
+only ffmpeg**: no audio devices, no screen-recording permission.
+
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Install ffmpeg | `brew install ffmpeg` (for `label`: see below) | `sudo apt install ffmpeg` (or your distro's package) | `winget install Gyan.FFmpeg` |
+| Screen | `avfoundation` | `x11grab` on `$DISPLAY` (X11) | `gdigrab` |
+| Microphone | detected automatically | the default PulseAudio/PipeWire input | detected automatically |
+| System audio (optional) | [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) + a Multi-Output Device | works out of the box: the default output's monitor | enable Stereo Mix, or install a virtual loopback |
+| Check what ffmpeg sees | `ffmpeg -f avfoundation -list_devices true -i ""` | `ffmpeg -sources pulse` | `ffmpeg -list_devices true -f dshow -i dummy` |
+
+`vidcapture help` prints the setup steps for the platform you run it on.
+
+- **macOS** — `label` needs the `drawtext` filter, which Homebrew's default
+  `ffmpeg` lacks: run `brew install ffmpeg-full`, then
   `export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"` so vidcapture uses
-  that build. Homebrew keeps `ffmpeg-full` outside the default PATH.
-- [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole), only for
-  `start` (system audio capture): `brew install blackhole-2ch`, then a
-  one-time Multi-Output Device setup — run `vidcapture help` for the exact
-  steps. **`cut` and `label` need neither BlackHole nor screen-recording
-  permission.**
+  that build. For system audio, `brew install blackhole-2ch`, then do the
+  one-time Multi-Output Device setup in Audio MIDI Setup.
+- **Linux** — `start` records X11. Under a Wayland session `x11grab` sees
+  only XWayland windows, so vidcapture warns you; log in to an X11 session
+  (e.g. "GNOME on Xorg") to record the whole screen. Audio needs nothing
+  extra: PulseAudio and PipeWire both monitor every output.
+- **Windows** — for system audio, run `mmsys.cpl`, open the Recording tab,
+  show disabled devices, and enable "Stereo Mix". If your driver has none,
+  install a virtual loopback device such as screen-capture-recorder's
+  `virtual-audio-capturer`. `label` draws with Arial unless `--font` says
+  otherwise.
 
 ## Install
 
@@ -128,8 +148,8 @@ The labeled video is written beside the source as `talk_labeled.mp4` unless
 `-o` says otherwise; `talk.mp4` itself is never modified. Labels are drawn
 into the pixels, so re-labeling means going back to the source.
 
-Every flag, the full timespec grammar, and BlackHole setup instructions are
-in `vidcapture help`.
+Every flag, the full timespec grammar, and your platform's setup instructions
+are in `vidcapture help`.
 
 ## Agent skill
 

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::cli::CutArgs;
 use crate::ffmpeg::{self, CutConfig};
+use crate::platform::Platform;
 use crate::{output, terminal};
 
 /// A written range shorter than the requested cut length by more than this is
@@ -33,7 +34,7 @@ pub fn run(args: CutArgs) -> anyhow::Result<()> {
     let (status, stderr) = match ffmpeg_run {
         Ok(run) => run,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            anyhow::bail!("ffmpeg not found. Install it with: brew install ffmpeg");
+            anyhow::bail!("{}", Platform::current().ffmpeg_not_found_message());
         }
         Err(e) => {
             output::remove_partial_output(&output_path);

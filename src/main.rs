@@ -4,6 +4,7 @@ mod cut;
 mod ffmpeg;
 mod label;
 mod output;
+mod platform;
 mod terminal;
 
 use std::time::Duration;
@@ -14,8 +15,11 @@ use clap::Parser;
 use capture::{CaptureSession, RealFfmpegProcess};
 use cli::{Args, Command, StartArgs};
 use ffmpeg::CaptureConfig;
+use platform::Platform;
 
 fn main() {
+    terminal::enable_ansi();
+
     let args = Args::parse();
 
     let result = match args.command {
@@ -40,24 +44,18 @@ fn run_capture(args: StartArgs) -> anyhow::Result<()> {
     let timestamp = Local::now();
     let path = output::prepare_output_path(args.output.as_deref(), &timestamp)?;
 
-    // Detect avfoundation devices and resolve BlackHole + microphone indices.
-    // Required for the mixed-audio capture pipeline from issue #3 (system +
-    // mic). If BlackHole is missing, fail fast with setup instructions rather
-    // than letting ffmpeg die with an opaque error.
-    let audio = match ffmpeg::detect_audio_setup() {
-        Ok(audio) => Some(audio),
-        Err(diag) => {
-            anyhow::bail!("{}\n\n{}", diag, ffmpeg::blackhole_setup_instructions());
-        }
-    };
+    // Find the screen and audio devices this platform records from. Only a
+    // missing ffmpeg or (on Linux) a missing display stops the capture; an
+    // audio source that is not there is left out, and the user is told what
+    // the recording will be without before it starts.
+    let devices = ffmpeg::detect_capture_devices(Platform::current())?;
+    for warning in ffmpeg::capture_warnings(&devices) {
+        terminal::print_warning(&warning);
+    }
 
     // Build ffmpeg config
-    let mut ffmpeg_config = CaptureConfig::new(path.to_string_lossy().to_string())
+    let ffmpeg_config = CaptureConfig::new(path.to_string_lossy().to_string(), devices)
         .with_verbose(args.verbose);
-
-    if let Some(a) = audio {
-        ffmpeg_config = ffmpeg_config.with_audio(a);
-    }
 
     let ffmpeg_config = match args.duration {
         Some(d) => ffmpeg_config.with_duration(d),
