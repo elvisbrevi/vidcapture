@@ -1,6 +1,6 @@
 [package]
 name = "vidcapture"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Cross-platform CLI to record screen and audio, cut videos precisely, and add timed text labels with ffmpeg."
 license = "MIT"

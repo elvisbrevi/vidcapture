@@ -5,6 +5,8 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(
     name = "vidcapture",
+    // Fixed rather than taken from argv[0], which is `vidcapture.exe` on Windows.
+    bin_name = "vidcapture",
     about = "CLI screen and audio recorder for macOS, Linux, and Windows",
     disable_help_subcommand = true
 )]
@@ -550,6 +552,20 @@ fn is_valid_decimal(s: &str) -> bool {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// On Windows the binary runs as `vidcapture.exe`. Usage lines must still
+    /// read `vidcapture`, the name every example and doc uses.
+    #[test]
+    fn usage_names_the_command_without_the_windows_exe_suffix() {
+        let top = Args::try_parse_from(["vidcapture.exe"]).unwrap_err().render().to_string();
+        assert!(top.contains("Usage: vidcapture <COMMAND>"), "got: {}", top);
+
+        let start = Args::try_parse_from(["vidcapture.exe", "start", "--help"])
+            .unwrap_err()
+            .render()
+            .to_string();
+        assert!(start.contains("Usage: vidcapture start"), "got: {}", start);
+    }
 
     #[test]
     fn parse_timespec_unit_suffixed_table() {

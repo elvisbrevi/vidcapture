@@ -1,0 +1,36 @@
+name: Release
+
+# Pushing a tag like v0.3.0 publishes that version to crates.io. Needs a
+# crates.io API token with the publish-update scope, stored as the repository
+# secret CARGO_REGISTRY_TOKEN.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the tag matches the crate version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # A verification build must not install the agent skill on the runner.
+          VIDCAPTURE_SKIP_SKILL_INSTALL: "1"
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::Add a crates.io token as the CARGO_REGISTRY_TOKEN repository secret, then re-run this job."
+            exit 1
+          fi
+          cargo publish --locked
