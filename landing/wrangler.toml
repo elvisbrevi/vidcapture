@@ -1,5 +1,8 @@
-# Cloudflare Pages project for https://vidcapture.elvisbrevi.cl
-# Static files only — there is no build step. See landing/README.md.
-name = "vidcapture-landing"
+# Cloudflare Worker (static assets only) for https://vidcapture.elvisbrevi.cl
+# No build step — see landing/README.md.
+name = "vidcapture"
 compatibility_date = "2026-10-01"
-pages_build_output_dir = "public"
+
+[assets]
+directory = "./public"
+not_found_handling = "404-page"
