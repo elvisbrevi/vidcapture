@@ -1,11 +1,17 @@
 name: Release
 
-# Pushing a tag like v0.3.0 publishes that version to crates.io. Needs a
-# crates.io API token with the publish-update scope, stored as the repository
-# secret CARGO_REGISTRY_TOKEN.
+# Publishes the version in Cargo.toml to crates.io and tags it v<version>.
+# Start it from the Actions tab ("Run workflow" on main), or push a v* tag
+# that matches the version. Needs a crates.io API token with the
+# publish-update scope, stored as the repository secret CARGO_REGISTRY_TOKEN.
 on:
+  workflow_dispatch:
   push:
     tags: ["v*"]
+
+permissions:
+  # To push the release tag when the run was started by hand.
+  contents: write
 
 jobs:
   publish:
@@ -15,11 +21,23 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Check the tag matches the crate version
+      - name: Read the crate version
+        id: crate
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check what is being released
+        env:
+          VERSION: ${{ steps.crate.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version $VERSION"
+              exit 1
+            fi
+          elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Release from main, not $GITHUB_REF_NAME"
             exit 1
           fi
 
@@ -34,3 +52,13 @@ jobs:
             exit 1
           fi
           cargo publish --locked
+
+      # A tag pushed with the workflow's own token does not start this
+      # workflow again.
+      - name: Tag the release
+        if: github.ref_type != 'tag'
+        env:
+          TAG: v${{ steps.crate.outputs.version }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
