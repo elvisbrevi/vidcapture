@@ -166,8 +166,10 @@ fn resolve_derived_output_path(
             dir.join(format!("{}_{}.mp4", source_stem, suffix))
         }
         Some(path) => {
-            let is_dir =
-                (path.exists() && path.is_dir()) || path.to_string_lossy().ends_with('/');
+            // A trailing separator marks a directory, whichever the platform
+            // uses: `clips/` everywhere, and `clips\` on Windows too.
+            let is_dir = (path.exists() && path.is_dir())
+                || path.to_string_lossy().ends_with(std::path::is_separator);
             if is_dir {
                 let dir = resolve_output_directory(path)?;
                 dir.join(format!("{}_{}.mp4", source_stem, suffix))
@@ -630,10 +632,10 @@ mod tests {
 
     #[test]
     fn label_output_file_keeps_the_given_name_as_mp4() {
+        let output = std::env::temp_dir().join("out.mkv");
         let result =
-            resolve_label_output_path(Path::new("/videos/talk.mov"), Some(Path::new("/tmp/out.mkv")))
-                .unwrap();
-        assert_eq!(result, PathBuf::from("/tmp/out.mp4"));
+            resolve_label_output_path(Path::new("/videos/talk.mov"), Some(&output)).unwrap();
+        assert_eq!(result, std::env::temp_dir().join("out.mp4"));
     }
 
     #[test]

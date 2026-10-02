@@ -6,7 +6,7 @@ As a developer, I need a lightweight CLI tool to capture my screen and audio (sy
 
 ## Solution
 
-A Rust CLI app (`vidcapture`) that shells out to ffmpeg for screen + audio capture on macOS. It supports continuous recording, timed capture, interval-based segment splitting, and interactive stop via keyboard. Output is MP4 (H.264 + AAC) with timestamped filenames.
+A Rust CLI app (`vidcapture`) that shells out to ffmpeg for screen + audio capture on macOS, Linux, and Windows. It supports continuous recording, timed capture, interval-based segment splitting, and interactive stop via keyboard. Output is MP4 (H.264 + AAC) with timestamped filenames.
 
 A second command, `vidcapture cut`, extracts one cut range from an existing source video into a new MP4, leaving the source untouched. The cut range is given as a start offset plus either an end offset or a cut length, at millisecond precision.
 
@@ -30,7 +30,7 @@ A third command, `vidcapture label`, draws timed text labels onto an existing so
 14. As a user, I want partial/unfinished files cleaned up on error, so that I don't end up with corrupt recordings.
 15. As a user, I want colored error messages on failure, so that I can quickly identify what went wrong.
 16. As a user, I want to combine duration and interval flags (e.g., `vidcapture start -d 1m -e 10s`) so that I get 6 segments of 10 seconds each.
-17. As a user, I want the app to require BlackHole for system audio capture, with a clear error message if it's not installed.
+17. As a user, I want `vidcapture start` to work with nothing installed but ffmpeg, recording system audio when a loopback device is available (BlackHole 2ch on macOS, the default output's monitor on Linux, Stereo Mix or a virtual loopback on Windows) and telling me before it starts which audio it will not record and how to add it.
 18. As a user, I want the app to use the current working directory as the default output location.
 19. As a user, I want to run `vidcapture cut talk.mp4 --from 10s --to 25s` so that I get a new video containing only that range of the source video.
 20. As a user, I want to run `vidcapture cut talk.mp4 --from 10s --length 1500ms` so that I can express the cut range as a length instead of an end offset.
@@ -52,19 +52,22 @@ A third command, `vidcapture label`, draws timed text labels onto an existing so
 36. As a user, I want a warning when a label window starts past the end of the source video, so that I know why the label I asked for never shows up.
 37. As a user, I want the labeled video written next to the source as `talk_labeled.mp4` by default, so that I don't have to name it.
 38. As a user, I want the source video left byte-for-byte untouched by a label pass, so that I can re-label the same recording with different text.
+39. As a user on Linux or Windows, I want the same `start`, `cut`, and `label` commands, flags, and output as on macOS, so that a recording workflow carries across machines.
+40. As a user, I want stopping a capture with `s` to leave a playable MP4 on every platform, so that no recording is lost to a missing trailer.
 
 ## Implementation Decisions
 
 ### Architecture
 
-Seven modules, each with a focused responsibility:
+Eight modules, each with a focused responsibility:
 
 - **cli** — Clap argument parsing, subcommand routing, flag validation. Derive-based structs for `Args`, `StartArgs`, `CutArgs`. Owns the timespec parser shared by every time-valued flag.
-- **ffmpeg** — Builds ffmpeg command strings, spawns/manages ffmpeg processes, handles segment output via ffmpeg's `-f segment`. Also builds the cut and label commands, including the `drawtext` filter chain and its filtergraph escaping, and parses ffmpeg's stderr (the avfoundation device listing, and the `time=` progress token both `cut` and `label` read back). Deep module with a clean interface.
+- **ffmpeg** — Builds ffmpeg command strings, spawns/manages ffmpeg processes, handles segment output via ffmpeg's `-f segment`. Builds the capture command for each platform's input devices and detects which of them are present. Also builds the cut and label commands, including the `drawtext` filter chain and its filtergraph escaping, and parses ffmpeg's output (the avfoundation, PulseAudio, and DirectShow device listings, and the `time=` progress token both `cut` and `label` read back). Deep module with a clean interface.
 - **capture** — Orchestration layer for capture sessions. Manages capture lifecycle: start, stop, interval logic, duration timers. Calls into ffmpeg module.
 - **cut** — Orchestration layer for cuts. Runs the cut command to completion, surfaces ffmpeg failures, and detects a short result. One-shot: no raw mode, no polling loop, no stop key.
 - **label** — Orchestration layer for label passes. Runs the label command to completion, turns a missing `drawtext` filter or a missing font into setup instructions, and warns about a label the source video is too short to reach. One-shot, like `cut`.
 - **terminal** — Puts terminal in raw mode via crossterm, polls for `s` key, prints colored status/error/warning messages.
+- **platform** — Which operating system the binary runs on, and the advice that depends on it: how to install ffmpeg, and a font file a label can be drawn with.
 - **output** — Resolves output directory, generates timestamped filenames, handles auto-increment on collision, resolves the derived output path for both `cut` (`_cut.mp4`) and `label` (`_labeled.mp4`), and deletes a partially written output after a failed run.
 
 ### CLI Structure
@@ -109,11 +112,15 @@ Args and flags (label):
 
 ### Screen & Audio Capture
 
-- Shell out to ffmpeg via `std::process::Command`.
-- macOS screen capture via ffmpeg's `avfoundation` input device.
-- System audio via BlackHole 2ch (same setup as interview-assistant: BlackHole + Multi-Output Device in Audio MIDI Setup).
+- Shell out to ffmpeg via `std::process::Command`, choosing the input devices for the platform (ADR 0004):
+  - macOS: screen and audio via `avfoundation`. System audio via BlackHole 2ch (same setup as interview-assistant: BlackHole + Multi-Output Device in Audio MIDI Setup).
+  - Linux: screen via `x11grab` on `$DISPLAY`; audio via `pulse`, which PipeWire also serves. System audio is `@DEFAULT_MONITOR@`, the monitor of the default output.
+  - Windows: screen via `gdigrab`; audio via `dshow`. System audio is a loopback device such as Stereo Mix.
 - Microphone captured alongside system audio.
-- Output: MP4 container, H.264 video codec, AAC audio codec.
+- System audio and microphone are each optional. A missing one is left out of the recording with a warning before it starts, never an error.
+- Each audio input is resampled to the output clock (`aresample=async=1`); two are mixed with `amix`.
+- Stopping on `s` must finalize the MP4: `SIGINT` on macOS and Linux, `q` on ffmpeg's stdin on Windows.
+- Output: MP4 container, H.264 video codec, AAC audio codec. On Linux and Windows the video is 4:2:0 (`-pix_fmt yuv420p`), because the RGB grabbers would otherwise produce a 4:4:4 profile most players reject.
 
 ### Interval Mode
 
@@ -232,7 +239,8 @@ Soft case: a cut range extending past the end of the source video is **not** an 
 - Clean up partial/unfinished files on error or crash, including a partially written cut.
 - Non-zero exit code (`1`) on failure.
 - `anyhow` for error context propagation.
-- Clear error if BlackHole is not detected. Note that neither `cut` nor `label` needs BlackHole or screen recording permission, so neither must run the avfoundation device detection that `start` does.
+- Clear error, with the platform's install command, if ffmpeg is not on PATH. On Linux, clear error if there is no X11 display (`$DISPLAY` unset).
+- A missing audio device is a warning, not an error (see Screen & Audio Capture). Note that neither `cut` nor `label` needs audio devices or screen recording permission, so neither must run the device detection that `start` does.
 
 ### Logging
 
@@ -251,8 +259,8 @@ Soft case: a cut range extending past the end of the source video is **not** an 
 - `tracing` + `tracing-subscriber` — logging
 
 **System:**
-- `ffmpeg` — must be installed (`brew install ffmpeg`)
-- `BlackHole 2ch` — virtual audio device for system audio capture (required by `start` only)
+- `ffmpeg` — must be installed (`brew install ffmpeg`, `sudo apt install ffmpeg`, or `winget install Gyan.FFmpeg`)
+- A loopback device for system audio — optional, `start` only: `BlackHole 2ch` on macOS, Stereo Mix or a virtual loopback on Windows. Linux needs none: PulseAudio and PipeWire monitor every output.
 
 No new dependency is introduced by the cut feature; in particular, `ffprobe` is deliberately not used.
 
@@ -263,14 +271,16 @@ No new dependency is introduced by the cut feature; in particular, `ffprobe` is 
 - **output module**: Unit tests for filename generation, directory resolution, auto-increment logic, and cut output resolution (file vs directory `-o`, default beside source, extension override, refusing to overwrite the source).
 - **cut module**: Unit tests for range validation; integration test cutting a tiny fixture video end to end.
 - **label module**: Unit tests for the ffmpeg-build diagnostics. Unit tests for label spec parsing (every key, the defaults, comma and backslash escaping, and each rejection) live with the parser in the cli module, and tests for the `drawtext` chain with the builder in the ffmpeg module. Integration tests labeling a tiny fixture video end to end, including the unreachable-label warning and the source being left untouched.
-- **capture module**: Integration tests with mocked ffmpeg interface — verify start/stop/interval orchestration.
+- **capture module**: Integration tests with mocked ffmpeg interface — verify start/stop/interval orchestration. The Windows stop (`q` on stdin) is tested against real ffmpeg on every platform, since only a decodable result proves the trailer was written.
+- **platform-specific capture**: The capture command for each platform is unit tested on any host, since the builder takes the platform's devices as data. The macOS command with BlackHole and a microphone is pinned argument for argument. The PulseAudio and DirectShow listing parsers are tested against captured ffmpeg output.
 - **terminal module**: Manual/integration testing — raw mode behavior is hard to unit test.
 
 Priority: timespec parsing, ffmpeg command building, and output path resolution should have thorough unit tests.
 
 ## Out of Scope
 
-- Cross-platform support (Linux, Windows) — macOS only for v1.
+- Wayland screen capture on Linux (it needs the xdg-desktop-portal, which ffmpeg has no input device for). Under Wayland, `start` warns that only XWayland windows are visible.
+- Recording system audio on macOS or Windows without a loopback device (native ScreenCaptureKit / WASAPI capture; see ADR 0004).
 - GUI interface.
 - Extracting more than one cut range per invocation.
 - Concatenating, re-ordering, or otherwise joining videos.
@@ -287,7 +297,7 @@ Priority: timespec parsing, ffmpeg command building, and output path resolution 
 
 ## Further Notes
 
-- The BlackHole setup mirrors the interview-assistant project. Consider documenting the Audio MIDI Setup configuration (Multi-Output Device) in a README.
+- The macOS BlackHole setup mirrors the interview-assistant project. Consider documenting the Audio MIDI Setup configuration (Multi-Output Device) in a README.
 - ffmpeg's `avfoundation` device list can be queried with `ffmpeg -f avfoundation -list_devices true -i ""` — useful for validating setup.
-- The `help` command should include setup instructions (ffmpeg install, BlackHole configuration), the `cut` and `label` commands, the label spec keys, and the timespec format.
+- The `help` command should include setup instructions for the platform it runs on (ffmpeg install; BlackHole on macOS, X11 and PulseAudio on Linux, Stereo Mix on Windows), the `cut` and `label` commands, the label spec keys, and the timespec format.
 - Extending the timespec parser touches `-d` and `-e`, which currently pass `as_secs()` to ffmpeg. That truncation has to go, or `-d 1.5s` silently records for one second.

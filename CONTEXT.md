@@ -1,6 +1,6 @@
 # vidcapture
 
-CLI screen and audio recorder for macOS. Captures full screen + system audio + microphone via ffmpeg, with timed and interval-based recording modes. It also cuts a range out of an existing video file, and draws timed text labels onto one.
+CLI screen and audio recorder for macOS, Linux, and Windows. Captures full screen + system audio + microphone via ffmpeg, with timed and interval-based recording modes. It also cuts a range out of an existing video file, and draws timed text labels onto one.
 
 ## Language
 
@@ -13,11 +13,11 @@ A portion of a capture session produced by interval mode (`-e`). Each segment is
 _Avoid_: chunk, part, split
 
 **System audio**:
-Audio output from the machine's speakers, captured via BlackHole virtual audio device. Requires a Multi-Output Device configured in Audio MIDI Setup.
+Audio output from the machine's speakers, captured through a loopback device: an audio input that carries what the machine is playing. On macOS that is BlackHole 2ch (with a Multi-Output Device configured in Audio MIDI Setup), on Linux the monitor of the default PulseAudio/PipeWire output, on Windows a device such as Stereo Mix. Optional: without a loopback device a capture session records the screen and microphone only, and says so before it starts.
 _Avoid_: speaker output, desktop audio
 
 **Microphone**:
-Audio input from the user's mic, captured alongside system audio during a capture session.
+Audio input from the user's mic, captured alongside system audio during a capture session. Optional, like system audio.
 _Avoid_: mic input, voice
 
 **Duration**:

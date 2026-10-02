@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>vidcapture — record, cut and label your screen from the terminal</title>
-<meta name="description" content="A Rust CLI that records your macOS screen and audio from the terminal. Stop with one key, cut a precise range, and burn in timed labels — no GUI, no project files, no export dialog.">
+<meta name="description" content="A Rust CLI that records your screen and audio from the terminal on macOS, Linux, and Windows. Stop with one key, cut a precise range, and burn in timed labels — no GUI, no project files, no export dialog.">
 <link rel="canonical" href="https://vidcapture.elvisbrevi.cl/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="vidcapture">
@@ -44,7 +44,7 @@
       <div class="hud hud-br" aria-hidden="true">press <kbd>s</kbd> to stop</div>
 
       <div class="hero">
-        <p class="eyebrow">Rust CLI for macOS</p>
+        <p class="eyebrow">Rust CLI for macOS, Linux &amp; Windows</p>
         <h1>Record your screen from the terminal. Stop&nbsp;it with one key.</h1>
         <p class="lede">
           Cut a precise range out of the result, and caption it, without opening
@@ -240,23 +240,27 @@
     <h2 id="req-h" class="section-h">Requirements</h2>
     <ul class="reqs">
       <li>
-        <strong>macOS.</strong> Capture goes through <code>ScreenCaptureKit</code>
-        via ffmpeg's <code>avfoundation</code> input, so it is not portable to
-        Linux or Windows.
+        <strong>macOS, Linux, or Windows.</strong> Capture goes through
+        ffmpeg's <code>avfoundation</code>, <code>x11grab</code> (X11), or
+        <code>gdigrab</code> input, with the microphone found automatically.
       </li>
       <li>
-        <strong><a href="https://ffmpeg.org">ffmpeg</a></strong> —
-        <code>brew install ffmpeg</code> for <code>start</code> and
-        <code>cut</code>. <code>label</code> needs the <code>drawtext</code>
-        filter: <code>brew install ffmpeg-full</code>, then
+        <strong><a href="https://ffmpeg.org">ffmpeg</a></strong> — the only
+        requirement: <code>brew install ffmpeg</code>,
+        <code>sudo apt install ffmpeg</code>, or
+        <code>winget install Gyan.FFmpeg</code>. On macOS, <code>label</code>
+        needs the <code>drawtext</code> filter:
+        <code>brew install ffmpeg-full</code>, then
         <code>export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"</code>.
       </li>
       <li>
-        <strong><a href="https://github.com/ExistentialAudio/BlackHole">BlackHole 2ch</a></strong>
-        — only for system audio in <code>start</code>:
-        <code>brew install blackhole-2ch</code>, then a one-time Multi-Output
-        Device setup (<code>vidcapture help</code> has the steps).
-        <code>cut</code> and <code>label</code> need neither BlackHole nor
+        <strong>System audio</strong> — optional. Linux records it out of the
+        box; macOS needs
+        <a href="https://github.com/ExistentialAudio/BlackHole">BlackHole 2ch</a>
+        and Windows needs Stereo Mix or a virtual loopback
+        (<code>vidcapture help</code> has the steps). Without it,
+        <code>start</code> records the screen and microphone.
+        <code>cut</code> and <code>label</code> need neither audio devices nor
         screen-recording permission.
       </li>
     </ul>

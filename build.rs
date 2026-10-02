@@ -23,7 +23,8 @@ fn main() {
     if env::var("PROFILE").as_deref() != Ok("release") {
         return;
     }
-    let Some(home) = env::var_os("HOME") else {
+    // Windows has no HOME; its home directory is USERPROFILE.
+    let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) else {
         return;
     };
     let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {

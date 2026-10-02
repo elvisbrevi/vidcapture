@@ -3,6 +3,8 @@ use std::time::Duration;
 use crossterm::event::{poll, read, Event, KeyCode};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
+use crate::platform::Platform;
+
 /// ANSI escape used to move the cursor back to the start of the current line.
 /// Using `\r` (carriage return) instead of `\n` lets the status line update
 /// in-place rather than scrolling the terminal on every poll iteration.
@@ -125,6 +127,13 @@ pub fn wait_for_stop_key(timeout: Duration) -> anyhow::Result<bool> {
     listener.wait_for_stop_key(timeout)
 }
 
+/// Let the Windows console interpret the ANSI escapes the status line and the
+/// colored messages are written with. Other terminals understand them already.
+pub fn enable_ansi() {
+    #[cfg(windows)]
+    let _ = crossterm::ansi_support::supports_ansi();
+}
+
 /// Print the saved output path to stderr.
 pub fn print_saved(path: &std::path::Path) {
     eprintln!("Saved to {}", path.display());
@@ -150,12 +159,18 @@ pub fn print_error(msg: &str) {
     eprintln!("\x1b[31merror\x1b[0m: {}", msg);
 }
 
-/// Format the help text — a `String` view of the user-facing help output.
-/// Kept separate from `print_help` so tests can assert against the content.
+/// Format the help text for the platform this binary runs on.
 pub fn format_help() -> String {
+    format_help_for(Platform::current())
+}
+
+/// Format the help text — a `String` view of the user-facing help output —
+/// with the setup instructions for `platform`. Kept separate from
+/// `print_help` so tests can assert against the content for every platform.
+pub fn format_help_for(platform: Platform) -> String {
     let mut help = String::new();
 
-    help.push_str("vidcapture — CLI screen and audio recorder for macOS\n\n");
+    help.push_str("vidcapture — CLI screen and audio recorder for macOS, Linux, and Windows\n\n");
 
     help.push_str("USAGE:\n");
     help.push_str("    vidcapture <COMMAND> [FLAGS]\n");
@@ -187,7 +202,7 @@ pub fn format_help() -> String {
     help.push_str("    -o, --output <PATH>      Output file or directory.\n");
     help.push_str("        --fast               Stream-copy instead of re-encoding.\n");
     help.push_str("    -v, --verbose            Show ffmpeg output.\n");
-    help.push_str("    cut requires ffmpeg but not BlackHole, and never touches the source video.\n\n");
+    help.push_str("    cut requires only ffmpeg, and never touches the source video.\n\n");
 
     help.push_str("FLAGS (label):\n");
     help.push_str("    <SOURCE>                 Path to the source video file. Required.\n");
@@ -195,7 +210,10 @@ pub fn format_help() -> String {
     help.push_str("                             Example: -l \"text=Intro,from=1m32s,to=2m,position=top\"\n");
     help.push_str("        --font <PATH>        Font file to draw labels with.\n");
     help.push_str("                             Default: the system font ffmpeg resolves.\n");
-    help.push_str("                             Example: /System/Library/Fonts/Helvetica.ttc\n");
+    help.push_str(&format!(
+        "                             Example: {}\n",
+        platform.example_font()
+    ));
     help.push_str("    -o, --output <PATH>      Output file or directory.\n");
     help.push_str("                             Default: <source>_labeled.mp4 beside the source.\n");
     help.push_str("    -v, --verbose            Show ffmpeg output.\n");
@@ -243,27 +261,7 @@ pub fn format_help() -> String {
     help.push_str("            01:30          1 minute 30 seconds\n");
     help.push_str("            1:02:03.250    1 hour 2 minutes 3.25 seconds\n\n");
 
-    help.push_str("SETUP:\n\n");
-
-    help.push_str("  1. Install ffmpeg:\n");
-    help.push_str("       brew install ffmpeg\n");
-    help.push_str("     For labels, install ffmpeg-full and put it first on PATH:\n");
-    help.push_str("       brew install ffmpeg-full\n");
-    help.push_str("       export PATH=\"$(brew --prefix ffmpeg-full)/bin:$PATH\"\n");
-    help.push_str("     Verify with: ffmpeg -version\n\n");
-
-    help.push_str("  2. Install BlackHole 2ch (for system audio capture):\n");
-    help.push_str("       brew install blackhole-2ch\n\n");
-
-    help.push_str("  3. Configure Multi-Output Device in Audio MIDI Setup:\n");
-    help.push_str("       a. Open Audio MIDI Setup (in /Applications/Utilities).\n");
-    help.push_str("       b. Click the + button at the bottom-left and choose \"Create Multi-Output Device\".\n");
-    help.push_str("       c. In the new device, check both \"BlackHole 2ch\" and your speakers/headphones.\n");
-    help.push_str("       d. Right-click the Multi-Output Device and select \"Use This Device For Sound Output\".\n");
-    help.push_str("       e. Set its drift correction to the BlackHole entry.\n\n");
-
-    help.push_str("  4. Sanity check that ffmpeg sees your devices:\n");
-    help.push_str("       ffmpeg -f avfoundation -list_devices true -i \"\"\n\n");
+    help.push_str(&format_setup(platform));
 
     help.push_str("EXAMPLES:\n");
     help.push_str("    vidcapture start                      # Record until you press 's'\n");
@@ -288,6 +286,77 @@ pub fn format_help() -> String {
     help.push_str("    vidcapture label talk.mp4 -l \"text=Plain,to=10s,background=none\"\n");
 
     help
+}
+
+/// The SETUP section of the help text: what `platform` needs before
+/// `vidcapture start` can record, and how to check ffmpeg sees it.
+fn format_setup(platform: Platform) -> String {
+    let mut setup = String::new();
+
+    match platform {
+        Platform::MacOs => {
+            setup.push_str("SETUP (macOS):\n\n");
+
+            setup.push_str("  1. Install ffmpeg:\n");
+            setup.push_str("       brew install ffmpeg\n");
+            setup.push_str("     For labels, install ffmpeg-full and put it first on PATH:\n");
+            setup.push_str("       brew install ffmpeg-full\n");
+            setup.push_str("       export PATH=\"$(brew --prefix ffmpeg-full)/bin:$PATH\"\n");
+            setup.push_str("     Verify with: ffmpeg -version\n\n");
+
+            setup.push_str("  2. Optional, to record system audio too: install BlackHole 2ch.\n");
+            setup.push_str("     Without it, start records the screen and microphone only.\n");
+            setup.push_str("       brew install blackhole-2ch\n\n");
+
+            setup.push_str("  3. Configure Multi-Output Device in Audio MIDI Setup (with BlackHole only):\n");
+            setup.push_str("       a. Open Audio MIDI Setup (in /Applications/Utilities).\n");
+            setup.push_str("       b. Click the + button at the bottom-left and choose \"Create Multi-Output Device\".\n");
+            setup.push_str("       c. In the new device, check both \"BlackHole 2ch\" and your speakers/headphones.\n");
+            setup.push_str("       d. Right-click the Multi-Output Device and select \"Use This Device For Sound Output\".\n");
+            setup.push_str("       e. Set its drift correction to the BlackHole entry.\n\n");
+
+            setup.push_str("  4. Sanity check that ffmpeg sees your devices:\n");
+            setup.push_str("       ffmpeg -f avfoundation -list_devices true -i \"\"\n\n");
+        }
+        Platform::Linux => {
+            setup.push_str("SETUP (Linux):\n\n");
+
+            setup.push_str("  1. Install ffmpeg from your distribution, e.g.:\n");
+            setup.push_str("       sudo apt install ffmpeg\n");
+            setup.push_str("     Verify with: ffmpeg -version\n\n");
+
+            setup.push_str("  2. start records the X11 display in $DISPLAY with ffmpeg's x11grab.\n");
+            setup.push_str("     Under Wayland it sees only X11 (XWayland) windows; log in to an\n");
+            setup.push_str("     X11 session (e.g. \"GNOME on Xorg\") to record the whole screen.\n\n");
+
+            setup.push_str("  3. Audio comes from PulseAudio or PipeWire, with nothing to install:\n");
+            setup.push_str("     system audio from the monitor of the default output, and the\n");
+            setup.push_str("     microphone from the default input. Pick both in your sound settings.\n\n");
+
+            setup.push_str("  4. Sanity check that ffmpeg sees your audio sources:\n");
+            setup.push_str("       ffmpeg -sources pulse\n\n");
+        }
+        Platform::Windows => {
+            setup.push_str("SETUP (Windows):\n\n");
+
+            setup.push_str("  1. Install ffmpeg (the full build, which labels need):\n");
+            setup.push_str("       winget install Gyan.FFmpeg\n");
+            setup.push_str("     Verify with: ffmpeg -version\n\n");
+
+            setup.push_str("  2. Optional, to record system audio too: enable a loopback device.\n");
+            setup.push_str("     Without one, start records the screen and microphone only.\n");
+            setup.push_str("       a. Run mmsys.cpl and open the Recording tab.\n");
+            setup.push_str("       b. Right-click the list and check \"Show Disabled Devices\".\n");
+            setup.push_str("       c. Right-click \"Stereo Mix\" and choose Enable.\n");
+            setup.push_str("     If your sound driver has no Stereo Mix, install a virtual loopback\n");
+            setup.push_str("     device such as screen-capture-recorder's virtual-audio-capturer.\n\n");
+
+            setup.push_str("  3. Sanity check that ffmpeg sees your devices:\n");
+            setup.push_str("       ffmpeg -list_devices true -f dshow -i dummy\n\n");
+        }
+    }
+
+    setup
 }
 
 /// Print the formatted help text to stdout.
@@ -447,23 +516,23 @@ mod tests {
     }
 
     #[test]
-    fn format_help_notes_cut_needs_ffmpeg_not_blackhole() {
+    fn format_help_notes_cut_needs_only_ffmpeg() {
         let help = format_help();
         assert!(
-            help.contains("ffmpeg") && help.contains("not BlackHole"),
-            "help text should note that cut requires ffmpeg but not BlackHole"
+            help.contains("cut requires only ffmpeg"),
+            "help text should note that cut requires nothing but ffmpeg"
         );
     }
 
     /// The note is about the `cut` command, not about `--verbose`. Hanging it
     /// off the `-v` entry reads as a property of that flag.
     #[test]
-    fn format_help_attributes_the_blackhole_note_to_cut_not_to_verbose() {
+    fn format_help_attributes_the_ffmpeg_note_to_cut_not_to_verbose() {
         let help = format_help();
         let note_line = help
             .lines()
-            .find(|line| line.contains("not BlackHole"))
-            .expect("help should carry the BlackHole note");
+            .find(|line| line.contains("requires only ffmpeg"))
+            .expect("help should carry the ffmpeg note");
         assert!(
             note_line.contains("cut"),
             "the note must name the cut command, got: {}",
@@ -472,8 +541,18 @@ mod tests {
     }
 
     #[test]
+    fn format_help_sets_up_the_platform_it_runs_on() {
+        let expected = match Platform::current() {
+            Platform::MacOs => "SETUP (macOS)",
+            Platform::Linux => "SETUP (Linux)",
+            Platform::Windows => "SETUP (Windows)",
+        };
+        assert!(format_help().contains(expected));
+    }
+
+    #[test]
     fn format_help_includes_ffmpeg_install_instructions() {
-        let help = format_help();
+        let help = format_help_for(Platform::MacOs);
         assert!(
             help.contains("brew install ffmpeg"),
             "help text should include the ffmpeg install command"
@@ -483,7 +562,7 @@ mod tests {
 
     #[test]
     fn format_help_includes_blackhole_setup_instructions() {
-        let help = format_help();
+        let help = format_help_for(Platform::MacOs);
         assert!(
             help.to_lowercase().contains("blackhole"),
             "help text should mention BlackHole"
@@ -498,12 +577,49 @@ mod tests {
         );
     }
 
+    /// BlackHole only adds system audio; `start` records without it.
+    #[test]
+    fn format_help_marks_blackhole_as_optional() {
+        let help = format_help_for(Platform::MacOs);
+        let install_step = help
+            .lines()
+            .find(|line| line.contains("install BlackHole 2ch"))
+            .expect("help should say how to install BlackHole");
+        assert!(install_step.contains("Optional"), "got: {}", install_step.trim());
+    }
+
     #[test]
     fn format_help_includes_list_devices_check() {
-        let help = format_help();
+        let help = format_help_for(Platform::MacOs);
         assert!(
             help.contains("avfoundation") && help.contains("list_devices"),
             "help text should include the avfoundation list_devices sanity check"
+        );
+    }
+
+    #[test]
+    fn format_help_sets_up_linux_without_blackhole() {
+        let help = format_help_for(Platform::Linux);
+        assert!(help.contains("sudo apt install ffmpeg"));
+        assert!(help.contains("x11grab"));
+        assert!(help.contains("PulseAudio or PipeWire"));
+        assert!(help.contains("ffmpeg -sources pulse"));
+        assert!(
+            !help.contains("BlackHole") && !help.contains("brew"),
+            "Linux setup must not send the user to macOS tools"
+        );
+    }
+
+    #[test]
+    fn format_help_sets_up_windows_without_blackhole() {
+        let help = format_help_for(Platform::Windows);
+        assert!(help.contains("winget install Gyan.FFmpeg"));
+        assert!(help.contains("Stereo Mix"));
+        assert!(help.contains("ffmpeg -list_devices true -f dshow -i dummy"));
+        assert!(help.contains(r"C:\Windows\Fonts\arial.ttf"));
+        assert!(
+            !help.contains("BlackHole") && !help.contains("brew"),
+            "Windows setup must not send the user to macOS tools"
         );
     }
 
