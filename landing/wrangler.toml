@@ -1,0 +1,8 @@
+# Cloudflare Worker (static assets only) for https://vidcapture.elvisbrevi.cl
+# No build step — see landing/README.md.
+name = "vidcapture"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./public"
+not_found_handling = "404-page"
