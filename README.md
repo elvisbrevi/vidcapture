@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
 
+**Website:** <https://vidcapture.elvisbrevi.cl>
+
 Record your screen and audio from the terminal. Stop it with one key. Cut a
 precise range out of the result, and caption it, without opening an editor.
 
@@ -147,6 +149,7 @@ installation. See `build.rs`.
 - [`PRD.md`](PRD.md) — product spec and implementation decisions
 - [`CONTEXT.md`](CONTEXT.md) — domain vocabulary
 - [`docs/adr/`](docs/adr) — architecture decision records
+- [`landing/`](landing) — source of the website, deployed to Cloudflare Pages
 
 ## License
 

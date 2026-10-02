@@ -5,10 +5,11 @@ edition = "2024"
 description = "macOS CLI to record screen and audio, cut videos precisely, and add timed text labels with ffmpeg."
 license = "MIT"
 repository = "https://github.com/elvisbrevi/vidcapture"
+homepage = "https://vidcapture.elvisbrevi.cl"
 authors = ["Elvis Brevi <elvisbrevi@gmail.com>"]
 keywords = ["screen-recording", "ffmpeg", "macos", "cli", "video"]
 categories = ["command-line-utilities", "multimedia"]
-exclude = ["evidence/**"]
+exclude = ["evidence/**", "landing/**"]
 build = "build.rs"
 
 [dependencies]
