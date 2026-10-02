@@ -9,7 +9,7 @@ homepage = "https://vidcapture.elvisbrevi.cl"
 authors = ["Elvis Brevi <elvisbrevi@gmail.com>"]
 keywords = ["screen-recording", "ffmpeg", "cross-platform", "cli", "video"]
 categories = ["command-line-utilities", "multimedia"]
-exclude = ["evidence/**", "landing/**"]
+exclude = ["evidence/**", "landing/**", ".github/**"]
 build = "build.rs"
 
 [dependencies]
