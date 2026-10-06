@@ -22,3 +22,9 @@ tracing-subscriber = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
